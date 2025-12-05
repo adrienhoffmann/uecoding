@@ -1,0 +1,141 @@
+/*
+================================================================================
+FOG OF WAR - MATERIAL SETUP INSTRUCTIONS
+================================================================================
+
+OPTION 1: CUSTOM HLSL NODE (EASIEST - Copy/Paste)
+-------------------------------------------------
+
+1. Open your PostProcess Material (M_FogOfWarPostProcess)
+2. Delete all existing nodes except the Material output
+3. Add a "Custom" node (search for "Custom" in palette)
+4. Set these properties on the Custom node:
+   - Code: (paste the HLSL code below)
+   - Output Type: CMOT Float3
+   - Add these inputs (click + next to "Inputs"):
+     * FogTexture (Texture2D) 
+     * WorldBoundsMin (Vector3)
+     * WorldSize (Vector3)
+     * HiddenColor (Vector3)
+     * ExploredColor (Vector3)
+     * SceneColorInput (Vector3)
+
+5. Connect inputs:
+   - FogTexture: Add TextureObjectParameter named "FogTexture"
+   - WorldBoundsMin: Add VectorParameter named "WorldBoundsMin"
+   - WorldSize: Add VectorParameter named "WorldSize"  
+   - HiddenColor: Add VectorParameter named "HiddenFogColor" (default: 0,0,0)
+   - ExploredColor: Add VectorParameter named "ExploredFogColor" (default: 0.2,0.2,0.3)
+   - SceneColorInput: Add SceneTexture node (PostProcessInput0), use Color output
+
+6. Connect Custom node output to Emissive Color
+
+HLSL CODE FOR CUSTOM NODE:
+--------------------------
+// Get world position from scene depth
+float2 ScreenUV = GetDefaultSceneTextureUV(Parameters, 14);
+float SceneDepth = CalcSceneDepth(ScreenUV);
+float3 WorldPos = ReconstructWorldPositionFromDepth(ScreenUV, SceneDepth);
+
+// Calculate fog UV from world position
+float2 FogUV;
+FogUV.x = (WorldPos.x - WorldBoundsMin.x) / WorldSize.x;
+FogUV.y = (WorldPos.y - WorldBoundsMin.y) / WorldSize.y;
+
+// Clamp UV to valid range
+FogUV = saturate(FogUV);
+
+// Sample fog texture (R = visibility state: 0=Hidden, 0.5=Explored, 1=Visible)
+float FogValue = Texture2DSample(FogTexture, FogTextureSampler, FogUV).r;
+
+// Interpolate colors based on fog state
+float3 FogColor;
+if (FogValue < 0.25)
+{
+    // Hidden: full fog
+    FogColor = HiddenColor;
+}
+else if (FogValue < 0.75)
+{
+    // Explored: partial fog
+    float t = (FogValue - 0.25) / 0.5;
+    FogColor = lerp(HiddenColor, ExploredColor, t);
+}
+else
+{
+    // Visible: show scene
+    return SceneColorInput;
+}
+
+// Blend fog with scene
+float FogStrength = 1.0 - saturate((FogValue - 0.25) * 2.0);
+return lerp(SceneColorInput, FogColor, FogStrength);
+
+================================================================================
+
+OPTION 2: MATERIAL FUNCTION NODES (Visual)
+------------------------------------------
+
+Create Material Function: /Game/FogOfWar/MF_FogOfWarOverlay
+
+NODES TO CREATE:
+1. WorldPosition (Absolute World Position, not camera relative)
+   - Set "World Position Type" to "Absolute World Position (Excluding Material Offsets)"
+
+2. ComponentMask (XY only)
+   - Connect WorldPosition to Input
+   - Enable R and G, disable B and A
+
+3. VectorParameter "WorldBoundsMin" 
+   - Default: (-15000, -15000, 0, 0)
+
+4. VectorParameter "WorldSize"
+   - Default: (30000, 30000, 0, 0)
+
+5. Subtract node
+   - A: WorldPosition.XY (from ComponentMask)
+   - B: WorldBoundsMin.RG
+
+6. Divide node  
+   - A: Subtract result
+   - B: WorldSize.RG
+   - This gives you FogUV!
+
+7. TextureObjectParameter "FogTexture"
+
+8. TextureSample
+   - Texture: FogTexture
+   - UVs: Divide result (FogUV)
+
+9. SceneTexture (PostProcessInput0)
+   - Get the current scene color
+
+10. VectorParameter "HiddenFogColor" (0,0,0,1)
+11. VectorParameter "ExploredFogColor" (0.1,0.1,0.15,1)
+
+12. Lerp nodes to blend based on fog texture value:
+    - If FogTexture.R < 0.25: use HiddenFogColor
+    - If FogTexture.R < 0.75: lerp HiddenFogColor -> ExploredFogColor  
+    - If FogTexture.R >= 0.75: use SceneColor (visible)
+
+13. FunctionOutput
+    - Connect final color result
+
+================================================================================
+
+SIMPLE TEST MATERIAL (Debug)
+----------------------------
+To test if UVs are correct, create this simple material:
+
+1. WorldPosition (Absolute)
+2. ComponentMask XY
+3. Subtract: WorldPos.XY - (-15000, -15000)
+4. Divide: Result / (30000, 30000)
+5. AppendVector: UV.x, UV.y, 0
+6. Connect to Emissive Color
+
+This should show a gradient from black (bottom-left) to yellow (top-right)
+across your playable area. If you see stripes/tiles, WorldPosition isn't working.
+
+================================================================================
+*/

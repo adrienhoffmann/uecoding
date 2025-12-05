@@ -1,0 +1,59 @@
+# Unreal Engine general
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+Build/
+.vs/
+.vscode/
+# Visual Studio
+*.sln
+*.suo
+*.user
+*.userosscache
+*.userprefs
+# Build artefacts
+*.log
+*.tlog
+*.obj
+*.o
+*.exe
+*.dll
+*.pdb
+# Mac
+.DS_Store
+# Thumbs
+Thumbs.db
+# Other
+/content/*
+# keep Content folder but ignore derived content if needed
+# Editor generated files
+*.opensdf
+*.sdf
+*.ipch/
+
+# Ignore large binary uasset cache (optional)
+*.uasset
+*.umap
+
+# Keep track of workspace but ignore local VS settings
+coding.code-workspace
+
+# Ignore per-user Unreal Engine settings
+Saved/**
+
+# Ignore Generated code and tools
+.vs/**
+Intermediate/**
+
+# Ignore temporary files
+*.tmp
+*.temp
+
+# Allow tracking source folder
+!/Source/
+!/Config/
+!/Content/**
+!/coding.uproject
+!/coding.sln
+!/README.md

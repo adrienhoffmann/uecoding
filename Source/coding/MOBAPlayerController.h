@@ -1,0 +1,177 @@
+// Fill out your copyright notice in the Description page of Project Settings.
+
+#pragma once
+
+#include "CoreMinimal.h"
+#include "GameFramework/PlayerController.h"
+#include "InputActionValue.h"
+#include "MOBAPlayerController.generated.h"
+
+class UHealthComponent;
+class UCombatComponent;
+class UInputMappingContext;
+class UInputAction;
+class UPlayerStatsComponent;
+class UPlayerHUDWidget;
+class UUserWidget;
+class AMapPing;
+
+UCLASS()
+class CODING_API AMOBAPlayerController : public APlayerController
+{
+	GENERATED_BODY()
+
+public:
+	AMOBAPlayerController();
+
+	// Move the camera to a world location (used by minimap clicks).
+	UFUNCTION(BlueprintCallable, Category = "Camera")
+	void MoveCameraToWorldLocation(const FVector& WorldLocation);
+
+protected:
+	virtual void BeginPlay() override;
+
+public:
+	virtual void Tick(float DeltaTime) override;
+	virtual void SetupInputComponent() override;
+
+	// Enhanced Input
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
+	UInputMappingContext* DefaultMappingContext;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
+	UInputAction* SetDestinationClickAction;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
+	UInputAction* SetDestinationTouchAction;
+
+	// Right click action for attack/interact
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
+	UInputAction* RightClickAction;
+    
+	// Zoom (mouse wheel) action - Enhanced Input
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
+	UInputAction* ZoomAction;
+
+	// Toggle camera lock (lock = camera follows pawn, unlock = free camera)
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
+	UInputAction* ToggleCameraLockAction;
+
+	// Camera lock properties
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Camera")
+	bool bCameraLocked;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Camera")
+	float EdgeScrollMargin;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Camera")
+	float EdgeScrollSpeed;
+
+	// Allow panning when cursor is outside the game window by this many pixels
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Camera")
+	float EdgeScrollOutsideMargin;
+
+	// Player HUD widget class to create at runtime
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "UI")
+	TSubclassOf<UUserWidget> PlayerHUDClass;
+
+	// MapPing class to spawn (set to your BP_MapPing Blueprint with sounds configured)
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ping")
+	TSubclassOf<AMapPing> MapPingClass;
+
+	UPROPERTY(Transient)
+	ACameraActor* FreeCameraActor;
+
+	// Current hovered actor under mouse
+	UPROPERTY(BlueprintReadOnly, Category = "Targeting")
+	AActor* HoveredActor;
+
+	// Currently selected target
+	UPROPERTY(BlueprintReadOnly, Category = "Targeting")
+	AActor* SelectedTarget;
+
+	// Maximum range for targeting
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Targeting")
+	float TargetingRange;
+
+	// Get hovered actor's health component
+	UFUNCTION(BlueprintPure, Category = "Targeting")
+	UHealthComponent* GetHoveredActorHealth() const;
+
+	// Get selected target's health component
+	UFUNCTION(BlueprintPure, Category = "Targeting")
+	UHealthComponent* GetSelectedTargetHealth() const;
+
+	// Convenience: get the PlayerStatsComponent from the controlled pawn
+	UFUNCTION(BlueprintCallable, Category = "Stats")
+	UPlayerStatsComponent* GetPlayerStatsComponent() const;
+
+	// Server RPC to request a ping spawn at world location
+	UFUNCTION(Server, Reliable, WithValidation)
+	void Server_RequestPing(const FVector& WorldLocation, EMapPingType PingType);
+
+	// Server RPC to request movement to a world location (server authoritative)
+	UFUNCTION(Server, Reliable, WithValidation)
+	void Server_RequestMoveTo(const FVector& WorldLocation);
+
+	// Client receives a navigation path (server->client) to display on minimap
+	UFUNCTION(Client, Reliable)
+	void Client_ReceiveNavPath(const TArray<FVector>& PathPoints);
+
+	// Select a target for attack
+	UFUNCTION(BlueprintCallable, Category = "Targeting")
+	void SelectTarget(AActor* NewTarget);
+
+	// Clear the selected target
+	UFUNCTION(BlueprintCallable, Category = "Targeting")
+	void ClearSelectedTarget();
+
+	// Check if we're following a target to attack
+	UPROPERTY(BlueprintReadOnly, Category = "Combat")
+	bool bIsFollowingTarget;
+
+private:
+	AActor* PreviousHoveredActor;
+	FVector CachedDestination;
+	bool bIsToDestination;
+	float FollowTime;
+
+	void UpdateMouseHover();
+	void OnInputStarted();
+	void OnSetDestinationTriggered();
+	void OnSetDestinationReleased();
+	void OnTouchTriggered();
+	void OnTouchReleased();
+	void OnRightClickTriggered();
+	void OnLeftClickPressed();
+	void HighlightActor(AActor* Actor, bool bHighlight);
+	void OnZoom(const struct FInputActionValue& Value);
+	// Runtime instance of the player HUD (C++ widget subclass)
+	UPROPERTY(Transient)
+	UPlayerHUDWidget* PlayerHUDWidget;
+
+	// Handler called when stats change (bound to PlayerStatsComponent->OnStatsChanged)
+	UFUNCTION()
+	void OnStatsChanged_Handler();
+
+	// Health / Mana event handlers (signatures match the component delegates)
+	UFUNCTION()
+	void OnHealthChanged_Handler(float Health, float MaxHealth, float DamageTaken);
+
+	UFUNCTION()
+	void OnManaChanged_Handler(float Mana, float MaxMana);
+
+	void FollowAndAttackTarget();
+
+	// Camera lock / free camera helpers (implemented in cpp)
+	void OnToggleCameraLock();
+	// Toggle minimap X/Y swap (debug)
+	void OnToggleMinimapSwap();
+
+	// Toggle minimap inversion flags (debug)
+	void OnToggleMinimapInvertX();
+	void OnToggleMinimapInvertY();
+	void HandleEdgeScroll(float DeltaTime);
+	void SpawnFreeCameraAt(const FVector& WorldLocation, const FRotator& WorldRotation);
+	void DestroyFreeCamera();
+};
