@@ -3,10 +3,14 @@
 #include "HealthComponent.h"
 #include "PlayerStatsComponent.h"
 #include "Logging.h"
+#include "Net/UnrealNetwork.h"
 
 UHealthComponent::UHealthComponent()
 {
 	PrimaryComponentTick.bCanEverTick = true;
+
+	// Enable replication for the health component
+	SetIsReplicatedByDefault(true);
 
 	// Default values
 	MaxHealth = 100.0f;
@@ -42,6 +46,13 @@ void UHealthComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActo
 
 void UHealthComponent::TakeDamage(float Damage, AActor* DamageCauser)
 {
+	// Only the server should modify health
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		UE_LOG(LogCoding, Warning, TEXT("HealthComponent::TakeDamage called on non-authority owner - ignoring"));
+		return;
+	}
+
 	if (bIsDead || Damage <= 0.0f)
 	{
 		return;
@@ -112,6 +123,7 @@ void UHealthComponent::TakeDamage(float Damage, AActor* DamageCauser)
 		*GetOwner()->GetName(), FinalDamage, BaseDamage, AttackerAD, bIsCrit ? 1 : 0, TargetArmor, Health, MaxHealth);
 
 	OnHealthChanged.Broadcast(Health, MaxHealth, FinalDamage);
+	// Clients will receive OnHealthChanged via replication callback OnRep_Health
 
 	if (Health <= 0.0f)
 	{
@@ -121,6 +133,13 @@ void UHealthComponent::TakeDamage(float Damage, AActor* DamageCauser)
 
 void UHealthComponent::Heal(float HealAmount)
 {
+	// Only server should modify health
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		UE_LOG(LogCoding, Warning, TEXT("HealthComponent::Heal called on non-authority owner - ignoring"));
+		return;
+	}
+
 	if (bIsDead || HealAmount <= 0.0f)
 	{
 		return;
@@ -133,6 +152,26 @@ void UHealthComponent::Heal(float HealAmount)
 	{
 		OnHealthChanged.Broadcast(Health, MaxHealth, 0.0f);
 	}
+}
+
+void UHealthComponent::OnRep_Health()
+{
+	OnHealthChanged.Broadcast(Health, MaxHealth, 0.0f);
+}
+
+void UHealthComponent::OnRep_IsDead()
+{
+	if (bIsDead)
+	{
+		OnDeath.Broadcast(GetOwner(), nullptr);
+	}
+}
+
+void UHealthComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(UHealthComponent, Health);
+	DOREPLIFETIME(UHealthComponent, bIsDead);
 }
 
 float UHealthComponent::GetHealthPercent() const
@@ -220,5 +259,6 @@ void UHealthComponent::Die(AActor* Killer)
 
 	bIsDead = true;
 	Health = 0.0f;
+	UE_LOG(LogCoding, Display, TEXT("HealthComponent::Die: %s died (Killer=%s)"), *GetOwner()->GetName(), Killer ? *Killer->GetName() : TEXT("NULL"));
 	OnDeath.Broadcast(GetOwner(), Killer);
 }

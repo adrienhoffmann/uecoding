@@ -1,6 +1,7 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
 #include "PlayerStatsComponent.h"
+#include "ItemData.h"
 #include "Logging.h"
 
 UPlayerStatsComponent::UPlayerStatsComponent()
@@ -400,4 +401,34 @@ void UPlayerStatsComponent::Server_AddAssist_Implementation()
 {
 	Assists++;
 	UE_LOG(LogCoding, Log, TEXT("[Server] Assist (Total: %d)"), Assists);
+}
+
+void UPlayerStatsComponent::ApplyItemModifiers(const FItemStatModifier& Modifiers)
+{
+	// Ensure executed on server; if not, call server RPC
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		Server_ApplyItemModifiers(Modifiers);
+		return;
+	}
+
+	AttackDamage += Modifiers.AttackDamage;
+	AbilityPower += Modifiers.AbilityPower;
+	Armor += Modifiers.Armor;
+	MagicResist += Modifiers.MagicResist;
+	AttackSpeed += Modifiers.AttackSpeed;
+	CritChance += Modifiers.CritChance;
+
+	ForceNotifyStatsChanged();
+}
+
+bool UPlayerStatsComponent::Server_ApplyItemModifiers_Validate(const FItemStatModifier& Modifiers)
+{
+	// Basic sanity checks - allow small or empty modifiers
+	return true; 
+}
+
+void UPlayerStatsComponent::Server_ApplyItemModifiers_Implementation(const FItemStatModifier& Modifiers)
+{
+	ApplyItemModifiers(Modifiers);
 }

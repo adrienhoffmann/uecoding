@@ -1,0 +1,65 @@
+#include "ShopComponent.h"
+#include "MOBAPlayerController.h"
+#include "PlayerStatsComponent.h"
+#include "Net/UnrealNetwork.h"
+#include "Logging.h"
+
+UShopComponent::UShopComponent()
+{
+    PrimaryComponentTick.bCanEverTick = false;
+}
+
+void UShopComponent::BeginPlay()
+{
+    Super::BeginPlay();
+}
+
+bool UShopComponent::Server_RequestPurchase_Validate(APlayerController* Buyer, UItemData* Item)
+{
+    // Basic validation — ensure non-null
+    return Buyer != nullptr && Item != nullptr;
+}
+
+void UShopComponent::Server_RequestPurchase_Implementation(APlayerController* Buyer, UItemData* Item)
+{
+    HandlePurchase(Buyer, Item);
+}
+
+void UShopComponent::HandlePurchase(APlayerController* Buyer, UItemData* Item)
+{
+    if (!Buyer || !Item) return;
+
+    // Only process purchases on the server
+    if (!GetOwner() || !GetOwner()->HasAuthority()) return;
+
+    // Ensure the requested item belongs to this shop
+    if (!AvailableItems.Contains(Item))
+    {
+        UE_LOG(LogCoding, Warning, TEXT("ShopComponent: Purchase denied — item not in this shop"));
+        return;
+    }
+
+    // Get player's stats component
+    AMOBAPlayerController* MPC = Cast<AMOBAPlayerController>(Buyer);
+    if (!MPC)
+    {
+        UE_LOG(LogCoding, Warning, TEXT("ShopComponent: Purchase denied — buyer is not a MOBAPlayerController"));
+        return;
+    }
+
+    UPlayerStatsComponent* Stats = MPC->GetPlayerStatsComponent();
+    if (!Stats) return;
+
+    // Check gold and spend
+    if (Stats->Gold < Item->Cost)
+    {
+        UE_LOG(LogCoding, Display, TEXT("Shop: Buyer %s lacks gold for %s (cost %d, have %d)"), *Buyer->GetName(), *Item->DisplayName.ToString(), Item->Cost, Stats->Gold);
+        return;
+    }
+
+    // Spend gold (server-side) and apply modifiers
+    Stats->SpendGold(Item->Cost);
+    Stats->ApplyItemModifiers(Item->Modifier);
+
+    UE_LOG(LogCoding, Display, TEXT("Shop: Buyer %s purchased %s"), *Buyer->GetName(), *Item->DisplayName.ToString());
+}

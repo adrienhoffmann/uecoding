@@ -1,6 +1,8 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
 #include "MOBAPlayerController.h"
+#include "ShopActor.h"
+#include "ShopComponent.h"
 #include "MOBACharacter.h"
 #include "HealthComponent.h"
 #include "CombatComponent.h"
@@ -21,12 +23,15 @@
 #include "Widgets/SWindow.h"
 #include "PlayerHUDWidget.h"
 #include "Blueprint/UserWidget.h"
+#include "PingWheelWidget.h"
 #include "AbilityComponent.h"
 #include "MapPing.h"
 #include "NavigationSystem.h"
 #include "Kismet/GameplayStatics.h"
 #include "Logging.h"
 #include "NavigationPath.h"
+#include "NiagaraFunctionLibrary.h"
+#include "NiagaraSystem.h"
 
 AMOBAPlayerController::AMOBAPlayerController()
 {
@@ -81,6 +86,7 @@ void AMOBAPlayerController::BeginPlay()
 		{
 			W->AddToViewport();
 			PlayerHUDWidget = Cast<UPlayerHUDWidget>(W);
+				UE_LOG(LogTemp, Log, TEXT("MOBA: PlayerHUDWidget created: %s"), PlayerHUDWidget ? *PlayerHUDWidget->GetName() : TEXT("NULL"));
 
 			// Bind to stats changed for live updates
 			UPlayerStatsComponent* Stats = GetPlayerStatsComponent();
@@ -106,7 +112,6 @@ void AMOBAPlayerController::BeginPlay()
 			}
 		}
 	}
-
 }
 
 void AMOBAPlayerController::SetupInputComponent()
@@ -166,6 +171,16 @@ void AMOBAPlayerController::SetupInputComponent()
 		// Debug: bind I/O to toggle invert X and invert Y on the minimap at runtime
 		InputComponent->BindKey(EKeys::I, EInputEvent::IE_Pressed, this, &AMOBAPlayerController::OnToggleMinimapInvertX);
 		InputComponent->BindKey(EKeys::O, EInputEvent::IE_Pressed, this, &AMOBAPlayerController::OnToggleMinimapInvertY);
+
+		// Fallback: bind RightMouseButton directly if No Enhanced Input action is assigned for it
+		if (!RightClickAction)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("MOBA: RightClickAction not set - binding Key fallback for RightMouseButton"));
+			InputComponent->BindKey(EKeys::RightMouseButton, EInputEvent::IE_Pressed, this, &AMOBAPlayerController::OnRightClickTriggered);
+		}
+        // Bind P to toggle the shop (fallback raw key input)
+        InputComponent->BindKey(EKeys::P, EInputEvent::IE_Pressed, this, &AMOBAPlayerController::OnOpenShopPressed);
+        UE_LOG(LogTemp, Log, TEXT("MOBA: Bound raw key P to shop open handler"));
     }
 }
 
@@ -191,7 +206,7 @@ void AMOBAPlayerController::OnToggleMinimapInvertX()
 	}
 	PlayerHUDWidget->ToggleInvertMinimapX();
 	UE_LOG(LogTemp, Log, TEXT("MOBA: Requested PlayerHUDWidget invert X toggle"));
-}
+	}
 
 void AMOBAPlayerController::OnToggleMinimapInvertY()
 {
@@ -202,6 +217,73 @@ void AMOBAPlayerController::OnToggleMinimapInvertY()
 	}
 	PlayerHUDWidget->ToggleInvertMinimapY();
 	UE_LOG(LogTemp, Log, TEXT("MOBA: Requested PlayerHUDWidget invert Y toggle"));
+}
+
+void AMOBAPlayerController::OnOpenShopPressed()
+{
+	UE_LOG(LogTemp, Log, TEXT("MOBA: OnOpenShopPressed called on controller %s"), *GetName());
+	if (GEngine)
+	{
+		GEngine->AddOnScreenDebugMessage(-1, 3.0f, FColor::Yellow, TEXT("MOBA: OnOpenShopPressed pressed"));
+	}
+	OpenClosestShop();
+}
+
+void AMOBAPlayerController::OpenClosestShop()
+{
+	UE_LOG(LogTemp, Log, TEXT("MOBA: OpenClosestShop called"));
+	if (!GetWorld())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("MOBA: OpenClosestShop: No world"));
+		return;
+	}
+
+	if (!PlayerHUDWidget)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("MOBA: PlayerHUDWidget not available to open shop [controller=%s]"), *GetName());
+		return;
+	}
+
+	APawn* P = GetPawn();
+	if (!P)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("MOBA: No pawn available; cannot find nearest shop"));
+		return;
+	}
+
+	TArray<AActor*> ShopActors;
+	UGameplayStatics::GetAllActorsOfClass(GetWorld(), AShopActor::StaticClass(), ShopActors);
+	UE_LOG(LogTemp, Log, TEXT("MOBA: Found %d shop actors in the world"), ShopActors.Num());
+
+	AShopActor* BestShop = nullptr;
+	float BestDist2 = FLT_MAX;
+	const FVector MyLoc = P->GetActorLocation();
+
+	for (AActor* A : ShopActors)
+	{
+		AShopActor* Shop = Cast<AShopActor>(A);
+		if (!Shop) continue;
+		const float Dist2 = FVector::DistSquared(MyLoc, Shop->GetActorLocation());
+		UE_LOG(LogTemp, Log, TEXT("MOBA: Shop candidate=%s dist2=%f"), *Shop->GetName(), Dist2);
+		if (Dist2 < BestDist2)
+		{
+			BestDist2 = Dist2;
+			BestShop = Shop;
+		}
+	}
+
+	if (!BestShop || BestDist2 > (ShopOpenRange * ShopOpenRange))
+	{
+		UE_LOG(LogTemp, Log, TEXT("MOBA: No shop nearby (within %f). Best found distance^2=%f"), ShopOpenRange, BestDist2);
+		if (PlayerHUDWidget->IsShopOpen())
+		{
+			PlayerHUDWidget->ToggleShop(nullptr);
+		}
+		return;
+	}
+
+	PlayerHUDWidget->ToggleShop(BestShop);
+	UE_LOG(LogTemp, Log, TEXT("MOBA: Toggled shop UI for actor %s (distance^2=%f)"), BestShop ? *BestShop->GetName() : TEXT("NULL"), BestDist2);
 }
 
 void AMOBAPlayerController::OnZoom(const FInputActionValue& Value)
@@ -253,16 +335,62 @@ void AMOBAPlayerController::OnLeftClickPressed()
 	if (GetWorld()->LineTraceSingleByChannel(WorldHit, WorldOrigin, TraceEnd, ECC_Visibility, Params))
 	{
 		FVector Location = WorldHit.Location;
-			// If Ctrl is held, open/send a ping. Otherwise only request move.
-			if (bCtrl)
+		// If Ctrl is held, open the ping wheel UI so player can select ping type
+		if (bCtrl)
+		{
+			if (PlayerHUDWidget && PlayerHUDWidget->PingWheelClass)
 			{
-				Server_RequestPing(Location, EMapPingType::Ping_OnMyWay);
+				// Ensure any existing instance is removed
+				if (PlayerHUDWidget->PingWheelInstance)
+				{
+					PlayerHUDWidget->PingWheelInstance->RemoveFromParent();
+					PlayerHUDWidget->PingWheelInstance = nullptr;
+				}
+
+				UUserWidget* PW = CreateWidget<UUserWidget>(this, PlayerHUDWidget->PingWheelClass);
+				if (PW)
+				{
+					// If it's our C++ PingWheelWidget, set world center
+					if (UPingWheelWidget* Ping = Cast<UPingWheelWidget>(PW))
+					{
+						Ping->SetCenterWorldLocation(Location);
+					}
+					PW->AddToViewport();
+					PlayerHUDWidget->PingWheelInstance = PW;
+
+					// Position the ping wheel at the cursor location
+					PW->ForceLayoutPrepass();
+					FVector2D DesiredSize = PW->GetDesiredSize();
+					float MouseX = 0.f, MouseY = 0.f;
+					GetMousePosition(MouseX, MouseY);
+					FVector2D CursorPos(MouseX, MouseY);
+
+					if (DesiredSize.IsNearlyZero())
+					{
+						// Widget hasn't calculated layout yet - use alignment to center
+						PW->SetAlignmentInViewport(FVector2D(0.5f, 0.5f));
+						PW->SetPositionInViewport(CursorPos, false);
+					}
+					else
+					{
+						// Position so the ping wheel is centered on cursor
+						FVector2D TopLeft = CursorPos - (DesiredSize * 0.5f);
+						PW->SetAlignmentInViewport(FVector2D(0.0f, 0.0f));
+						PW->SetPositionInViewport(TopLeft, false);
+					}
+				}
 			}
 			else
 			{
-				// Only request movement on plain left-click; pings should come from the ping wheel (Ctrl+click)
-				Server_RequestMoveTo(Location);
+				// Fallback: send a default OnMyWay ping
+				Server_RequestPing(Location, EMapPingType::Ping_OnMyWay);
 			}
+		}
+		else
+		{
+			// Plain left-click no longer issues movement; selection logic could go here.
+			// For now, do nothing on plain left-click to avoid accidental movement.
+		}
 	}
 }
 
@@ -301,6 +429,18 @@ void AMOBAPlayerController::Server_RequestPing_Implementation(const FVector& Wor
 	}
 }
 
+bool AMOBAPlayerController::Server_RequestPurchase_Validate(AShopActor* Shop, UItemData* Item)
+{
+	return Shop != nullptr && Item != nullptr;
+}
+
+void AMOBAPlayerController::Server_RequestPurchase_Implementation(AShopActor* Shop, UItemData* Item)
+{
+	if (!Shop || !Shop->ShopComponent) return;
+	// Call server-side shop handling
+	Shop->ShopComponent->HandlePurchase(this, Item);
+}
+
 bool AMOBAPlayerController::Server_RequestMoveTo_Validate(const FVector& WorldLocation)
 {
 	return true;
@@ -311,16 +451,33 @@ void AMOBAPlayerController::Server_RequestMoveTo_Implementation(const FVector& W
 	APawn* P = GetPawn();
 	if (!P) return;
 
+	// Extra debug info to help diagnose why movement may not occur
+	UE_LOG(LogCoding, Display, TEXT("Server_RequestMoveTo_Implementation: Authority=%d IsLocalController=%d ControllerRole=%d"), HasAuthority() ? 1 : 0, IsLocalController() ? 1 : 0, (int32)GetLocalRole());
+	UE_LOG(LogCoding, Display, TEXT("Server_RequestMoveTo_Implementation: Pawn=%s PawnRole=%d IsPlayerControlled=%d PossessedBy=%s"), P ? *P->GetName() : TEXT("NULL"), P ? (int32)P->GetLocalRole() : -1, P ? (P->IsPlayerControlled() ? 1 : 0) : 0, P && P->GetController() ? *P->GetController()->GetName() : TEXT("NULL"));
+
 	UNavigationSystemV1* NavSys = FNavigationSystem::GetCurrent<UNavigationSystemV1>(GetWorld());
 	if (!NavSys) return;
 
 	FNavLocation Projected;
 	FVector Extent(50.f, 50.f, 200.f);
+	UE_LOG(LogCoding, Display, TEXT("Server_RequestMoveTo_Implementation: received move request to %s from client %s (Pawn=%s PawnLocation=%s)"), *WorldLocation.ToString(), *GetName(), P ? *P->GetName() : TEXT("NULL"), P ? *P->GetActorLocation().ToString() : TEXT("NULL"));
+
 	if (NavSys->ProjectPointToNavigation(WorldLocation, Projected, Extent))
 	{
 		// Use SimpleMoveToLocation - this will request server-side movement for the controller
 		UAIBlueprintHelperLibrary::SimpleMoveToLocation(this, Projected.Location);
-		UE_LOG(LogCoding, Verbose, TEXT("Server requested move to %s (projected %s)"), *WorldLocation.ToString(), *Projected.Location.ToString());
+		UE_LOG(LogCoding, Verbose, TEXT("Server requested move to %s (projected %s) using controller %s"), *WorldLocation.ToString(), *Projected.Location.ToString(), *GetName());
+
+		// If the controller does not possess the pawn (edge case), attempt to use pawn's controller
+		if (P->GetController() != this)
+		{
+			AController* PawnController = P->GetController();
+			if (PawnController && PawnController != this)
+			{
+				UE_LOG(LogCoding, Warning, TEXT("Server_RequestMoveTo: Controller mismatch (this=%s pawn->controller=%s), trying PawnController SimpleMoveTo"), *GetName(), *PawnController->GetName());
+				UAIBlueprintHelperLibrary::SimpleMoveToLocation(PawnController, Projected.Location);
+			}
+		}
 
 		// Compute navigation path and send to client for minimap drawing
 		UNavigationPath* NavPath = UNavigationSystemV1::FindPathToLocationSynchronously(GetWorld(), P->GetActorLocation(), Projected.Location);
@@ -329,8 +486,54 @@ void AMOBAPlayerController::Server_RequestMoveTo_Implementation(const FVector& W
 			TArray<FVector> Points = NavPath->PathPoints;
 			Client_ReceiveNavPath(Points);
 		}
+		else
+		{
+			UE_LOG(LogCoding, Warning, TEXT("Server_RequestMoveTo: NavPath invalid or null - will try direct movement fallback"));
+			// Fallback: attempt to move pawn directly if CharacterMovement exists
+			if (P->IsA<ACharacter>())
+			{
+				ACharacter* C = Cast<ACharacter>(P);
+				if (C && C->GetCharacterMovement())
+				{
+					FVector Dir = (Projected.Location - C->GetActorLocation()).GetSafeNormal();
+					C->AddMovementInput(Dir, 1.0f);
+					UE_LOG(LogCoding, Verbose, TEXT("Server_RequestMoveTo: Fallback AddMovementInput toward %s"), *Projected.Location.ToString());
+				}
+			}
+		}
 	}
-}
+	else
+	{
+		UE_LOG(LogCoding, Warning, TEXT("Server_RequestMoveTo: ProjectPointToNavigation failed for %s"), *WorldLocation.ToString());
+		// Attempt SimpleMoveToLocation directly with the raw location
+		UAIBlueprintHelperLibrary::SimpleMoveToLocation(this, WorldLocation);
+	}
+	}
+
+	bool AMOBAPlayerController::Server_SpawnCursorEffect_Validate(const FVector& WorldLocation)
+	{
+		return true;
+	}
+
+	void AMOBAPlayerController::Server_SpawnCursorEffect_Implementation(const FVector& WorldLocation)
+	{
+		UE_LOG(LogCoding, Display, TEXT("Server_SpawnCursorEffect_Implementation: spawn request from %s to %s"), *GetName(), *WorldLocation.ToString());
+		// Broadcast to all clients so everyone sees the cursor effect
+		Multicast_SpawnCursorEffect(WorldLocation);
+	}
+
+	void AMOBAPlayerController::Multicast_SpawnCursorEffect_Implementation(const FVector& WorldLocation)
+	{
+		if (CursorClickEffect)
+		{
+			UNiagaraFunctionLibrary::SpawnSystemAtLocation(GetWorld(), CursorClickEffect, WorldLocation, FRotator::ZeroRotator, FVector(1.0f), true, true, ENCPoolMethod::AutoRelease);
+			UE_LOG(LogCoding, Verbose, TEXT("Multicast_SpawnCursorEffect: spawned effect at %s"), *WorldLocation.ToString());
+		}
+		else
+		{
+			UE_LOG(LogCoding, Warning, TEXT("Multicast_SpawnCursorEffect: CursorClickEffect not set - cannot spawn"));
+		}
+	}
 
 void AMOBAPlayerController::OnToggleCameraLock()
 {
@@ -372,6 +575,49 @@ void AMOBAPlayerController::OnToggleCameraLock()
 	}
 }
 
+bool AMOBAPlayerController::Server_RequestSetTarget_Validate(AActor* NewTarget)
+{
+	// Validate we can target that actor, basic sanity checks
+	if (!NewTarget) return false;
+	UHealthComponent* HealthComp = NewTarget->FindComponentByClass<UHealthComponent>();
+	return HealthComp != nullptr && !HealthComp->bIsDead;
+}
+
+void AMOBAPlayerController::Server_RequestSetTarget_Implementation(AActor* NewTarget)
+{
+	// Server-side selection: ensure we can target and set the target on the controlled pawn's combat component
+	if (!NewTarget) return;
+	APawn* ControlledPawn = GetPawn();
+	if (!ControlledPawn) return;
+
+	// Check not ally
+	UHealthComponent* OwnerHealth = ControlledPawn->FindComponentByClass<UHealthComponent>();
+	UHealthComponent* TargetHealth = NewTarget->FindComponentByClass<UHealthComponent>();
+	int32 OwnerTeam = OwnerHealth ? OwnerHealth->TeamID : -1;
+	int32 TargetTeam = TargetHealth ? TargetHealth->TeamID : -1;
+	bool bAreEnemies = UHealthComponent::AreEnemies(ControlledPawn, NewTarget);
+	UE_LOG(LogCoding, Display, TEXT("Server_RequestSetTarget: OwnerTeam=%d TargetTeam=%d AreEnemies=%d"), OwnerTeam, TargetTeam, bAreEnemies ? 1 : 0);
+	if (OwnerHealth && !bAreEnemies)
+	{
+		UE_LOG(LogCoding, Warning, TEXT("Server_RequestSetTarget: Rejecting target selection - same team or invalid"));
+		return; // can't target allies
+	}
+
+	// Set SelectedTarget server-side for authoritative logic
+	SelectedTarget = NewTarget;
+	UE_LOG(LogCoding, Display, TEXT("Server_RequestSetTarget_Implementation: SelectedTarget set to %s for controller %s"), *NewTarget->GetName(), *GetName());
+
+	// Set in CombatComponent for server-side attacking
+	UCombatComponent* CombatComp = ControlledPawn->FindComponentByClass<UCombatComponent>();
+	if (CombatComp)
+	{
+		CombatComp->SetTarget(NewTarget);
+	}
+
+	// Ensure server-side follow/attack loop is enabled
+	bIsFollowingTarget = true;
+}
+
 void AMOBAPlayerController::SpawnFreeCameraAt(const FVector& WorldLocation, const FRotator& WorldRotation)
 {
 	DestroyFreeCamera();
@@ -400,32 +646,36 @@ void AMOBAPlayerController::DestroyFreeCamera()
 
 void AMOBAPlayerController::MoveCameraToWorldLocation(const FVector& WorldLocation)
 {
-	UE_LOG(LogTemp, Log, TEXT("MOBA: MoveCameraToWorldLocation called -> %s"), *WorldLocation.ToString());
+	// Calculate elevated camera position for top-down view
+	// Use the same height concept as CameraBoom (TargetArmLength ~1200) + pitch offset
+	const float CameraHeight = 1500.f; // Height above ground for top-down view
+	const FRotator CamRot = FRotator(-60.f, 0.f, 0.f); // Top-down pitch
+	
+	// Calculate camera position: offset backwards based on pitch to look at the target point
+	// With -60 pitch, the camera should be positioned back and up to look at WorldLocation
+	FVector CameraPos;
+	CameraPos.X = WorldLocation.X;
+	CameraPos.Y = WorldLocation.Y;
+	CameraPos.Z = WorldLocation.Z + CameraHeight;
+	
+	UE_LOG(LogTemp, Log, TEXT("MOBA: MoveCameraToWorldLocation called -> Target=%s CameraPos=%s"), *WorldLocation.ToString(), *CameraPos.ToString());
 
-	// If camera is locked, spawn a free camera and move view to it
+	// If camera is locked, unlock it first
 	if (bCameraLocked)
 	{
-		// Unlock camera and spawn free camera at location with a default top-down pitch
 		bCameraLocked = false;
-		FRotator CamRot = FRotator(-60.f, 0.f, 0.f);
-		SpawnFreeCameraAt(WorldLocation, CamRot);
-		if (FreeCameraActor)
-		{
-			SetViewTargetWithBlend(FreeCameraActor, 0.2f);
-		}
-		return;
 	}
 
 	// If we already have a free camera, just move it there
 	if (FreeCameraActor)
 	{
-		FreeCameraActor->SetActorLocation(WorldLocation);
+		FreeCameraActor->SetActorLocation(CameraPos);
+		FreeCameraActor->SetActorRotation(CamRot);
 	}
 	else
 	{
 		// Otherwise spawn one and set view
-		FRotator CamRot = FRotator(-60.f, 0.f, 0.f);
-		SpawnFreeCameraAt(WorldLocation, CamRot);
+		SpawnFreeCameraAt(CameraPos, CamRot);
 		if (FreeCameraActor)
 		{
 			SetViewTargetWithBlend(FreeCameraActor, 0.2f);
@@ -843,6 +1093,8 @@ void AMOBAPlayerController::ClearSelectedTarget()
 
 void AMOBAPlayerController::OnRightClickTriggered()
 {
+	UE_LOG(LogCoding, Verbose, TEXT("OnRightClickTriggered: called"));
+
 	// Stop current movement
 	StopMovement();
 	bIsFollowingTarget = false;
@@ -854,17 +1106,28 @@ void AMOBAPlayerController::OnRightClickTriggered()
 		if (HealthComp && !HealthComp->bIsDead)
 		{
 			// Select and start following target to attack
+			UE_LOG(LogCoding, Log, TEXT("OnRightClickTriggered: Hovered actor %s - selecting and following"), *HoveredActor->GetName());
+			// Select locally for visual feedback, and request server to set target for authoritative combat
 			SelectTarget(HoveredActor);
+			Server_RequestSetTarget(HoveredActor);
 			bIsFollowingTarget = true;
 			return;
 		}
 	}
 
-	// No valid target - just move to location
+	// No valid target - just move to location (server authoritative)
 	FHitResult Hit;
 	if (GetHitResultUnderCursor(ECollisionChannel::ECC_Visibility, true, Hit))
 	{
-		UAIBlueprintHelperLibrary::SimpleMoveToLocation(this, Hit.Location);
+		UE_LOG(LogCoding, Display, TEXT("OnRightClickTriggered: Requesting server move to %s"), *Hit.Location.ToString());
+		// Request server to move the pawn (authoritative)
+		Server_RequestMoveTo(Hit.Location);
+		// Spawn cursor effect on all clients via server RPC
+		Server_SpawnCursorEffect(Hit.Location);
+	}
+	else
+	{
+		UE_LOG(LogCoding, Warning, TEXT("OnRightClickTriggered: no hit under cursor"));
 	}
 }
 

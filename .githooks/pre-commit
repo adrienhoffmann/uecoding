@@ -1,0 +1,14 @@
+#!/bin/sh
+# Wrapper for Windows - call PowerShell pre-commit script
+# This wrapper allows Git (Bash) to call the PowerShell pre-commit implementation
+SCRIPT_DIR="$(dirname "$0")"
+if command -v powershell >/dev/null 2>&1; then
+  powershell -NoProfile -ExecutionPolicy Bypass -File "$SCRIPT_DIR/pre-commit.ps1"
+  exit $?
+elif command -v pwsh >/dev/null 2>&1; then
+  pwsh -NoProfile -ExecutionPolicy Bypass -File "$SCRIPT_DIR/pre-commit.ps1"
+  exit $?
+else
+  echo "No PowerShell found to run hook"
+  exit 0
+fi

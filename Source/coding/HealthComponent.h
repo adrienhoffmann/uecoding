@@ -23,8 +23,8 @@ protected:
 public:	
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
-	// Current health
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Health")
+	// Current health (replicated)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Health", ReplicatedUsing=OnRep_Health)
 	float Health;
 
 	// Maximum health
@@ -35,8 +35,8 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Health")
 	float HealthRegenRate;
 
-	// Is this actor dead?
-	UPROPERTY(BlueprintReadOnly, Category = "Health")
+	// Is this actor dead? (replicated)
+	UPROPERTY(BlueprintReadOnly, Category = "Health", ReplicatedUsing=OnRep_IsDead)
 	bool bIsDead;
 
 	// Team ID (0 = Blue, 1 = Red, -1 = Neutral)
@@ -84,4 +84,15 @@ public:
 
 private:
 	void Die(AActor* Killer);
+
+	// Replication callbacks for clients
+	UFUNCTION()
+	void OnRep_Health();
+
+	UFUNCTION()
+	void OnRep_IsDead();
+
+public:
+	// Replication
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 };

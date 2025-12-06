@@ -851,9 +851,9 @@ void AFogOfWarManager::OnCanvasUpdate(UCanvas* Canvas, int32 Width, int32 Height
 			if (State == EFogState::Hidden) continue; // Already black
 			
 			// Flip Y: draw row Y at canvas position (GridSizeY - 1 - Y)
-			// Also flip X to match world coordinate convention
+			// We do NOT flip X; keep width left-to-right consistent with world X
 			int32 FlippedY = GridSizeY - 1 - Y;
-			int32 FlippedX = GridSizeX - 1 - X;
+			int32 FlippedX = X;
 
 			// Compute integer pixel coordinates to avoid 1-pixel seams between adjacent boxes
 			int32 PixelX0 = FMath::FloorToInt(FlippedX * CellWidth);

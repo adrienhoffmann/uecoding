@@ -8,6 +8,8 @@
 #include "PlayerHUDWidget.generated.h"
 
 class UTextBlock;
+class UShopPanelWidget;
+class AShopActor;
 class UProgressBar;
 class UImage;
 class UButton;
@@ -110,6 +112,10 @@ protected:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap")
     FVector2D WorldBoundsHalfSize = FVector2D(12000.f, 12000.f);
 
+    // World center (X,Y) corresponding to minimap center. If zero, the origin is used.
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap")
+    FVector2D WorldCenter = FVector2D(0.f, 0.f);
+
     // Allow toggling/inverting axes in case the world/camera orientation differs from the minimap texture
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap")
     bool bInvertMinimapX = false;
@@ -123,6 +129,14 @@ protected:
     // Default false to avoid overriding an explicit default inversion in editor builds.
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap")
     bool bAutoDetectMinimapY = false;
+
+    // Automatically detect world bounds from registered minimap components (if true)
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap")
+    bool bAutoDetectWorldBounds = true;
+
+    // Extra margin (in world units) to add around detected extents when auto-detecting world bounds
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap")
+    float AutoDetectWorldBoundsMargin = 500.0f;
 
 public:
     // Runtime control: allow toggling inversion from Blueprints or console via the PlayerController
@@ -264,6 +278,27 @@ private:
     FVector LastClickWorld;
     bool bHasLastClick = false;
 
+    // Internal flag: have we auto-detected world bounds yet? (avoid repeated recomputation)
+    bool bWorldBoundsAutoDetected = false;
+
+    // Path drawing update controls
+    // Seconds between recomputing the nav path for the minimap while moving
+    UPROPERTY(EditAnywhere, Category = "Minimap|Path")
+    float MinimapPathUpdateInterval = 0.15f;
+
+    // Internal accumulator for time since last path update
+    double PathUpdateAccumulator = 0.0;
+
+    // Threshold (world units) the pawn must move before forcing a path recompute
+    UPROPERTY(EditAnywhere, Category = "Minimap|Path")
+    float PathRecomputeDistanceThreshold = 50.0f;
+
+    // Last path target used to compute NavPathPoints
+    FVector LastPathTarget = FVector::ZeroVector;
+
+    // Last cached pawn location used to decide if path should be recomputed
+    FVector LastPawnLocation = FVector::ZeroVector;
+
 public:
     // For debugging: set the last click info so NativePaint can display it
     UFUNCTION(BlueprintCallable, Category = "Minimap|Debug")
@@ -273,4 +308,54 @@ public:
     // Add a destruction mark at world location (call from Blueprint when an object is destroyed)
     UFUNCTION(BlueprintCallable, Category = "Minimap")
     void AddDestructionMark(const FVector& WorldLocation);
+
+public:
+    // Show the ping wheel centered at a given world location (projects to screen and positions widget)
+    UFUNCTION(BlueprintCallable, Category = "PingWheel")
+    void ShowPingWheelAtWorldLocation(const FVector& WorldLocation);
+    
+    // Show the ping wheel directly at a screen location (e.g. minimap click), centered at that pixel position
+    UFUNCTION(BlueprintCallable, Category = "PingWheel")
+    void ShowPingWheelAtScreenLocation(const FVector2D& ScreenLocation);
+
+    // Request to purchase an item from a shop actor (calls server via playercontroller). Implemented in PlayerHUDWidget to expose to UMG
+    UFUNCTION(BlueprintCallable, Category = "Shop")
+    void RequestPurchase(class AShopActor* Shop, class UItemData* Item);
+
+    // ===== Shop Panel Integration =====
+    // Ouvre le panneau du shop avec les items disponibles
+    UFUNCTION(BlueprintCallable, Category = "Shop")
+    void OpenShop(AShopActor* Shop);
+
+    // Ferme le panneau du shop
+    UFUNCTION(BlueprintCallable, Category = "Shop")
+    void CloseShop();
+
+    // Toggle le panneau du shop
+    UFUNCTION(BlueprintCallable, Category = "Shop")
+    void ToggleShop(AShopActor* Shop);
+
+    // Retourne true si le shop est ouvert
+    UFUNCTION(BlueprintCallable, BlueprintPure, Category = "Shop")
+    bool IsShopOpen() const;
+
+protected:
+    // Panneau du shop (optionnel - bindez à un widget ShopPanelWidget dans votre HUD)
+    UPROPERTY(meta = (BindWidgetOptional))
+    UShopPanelWidget* ShopPanel;
+
+    // Optional: class to create a runtime ShopPanel if none is present in the HUD
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shop")
+    TSubclassOf<UShopPanelWidget> ShopPanelClass;
+
+    // Runtime instance of the shop panel created by code if fallback is needed
+    UPROPERTY(Transient)
+    UShopPanelWidget* RuntimeShopPanelInstance;
+
+    // Optional debug overlay to force visual confirmation when shop opens
+    UPROPERTY(Transient)
+    class UDebugShopOverlayWidget* DebugShopOverlayInstance;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shop")
+    TSubclassOf<class UDebugShopOverlayWidget> DebugShopOverlayClass;
 };

@@ -81,4 +81,17 @@ void AMOBACharacter::BeginPlay()
 	// Components are already created and attached at this point
 	UE_LOG(LogCoding, Log, TEXT("MOBACharacter BeginPlay - PlayerStatsComponent: %s"), 
 		PlayerStatsComponent ? TEXT("VALID") : TEXT("NULL"));
+
+	// Ensure the HealthComponent has a valid TeamID. If it's neutral (-1), assign it to team 0
+	if (HealthComponent && HealthComponent->TeamID == -1)
+	{
+		HealthComponent->TeamID = 0;
+		UE_LOG(LogCoding, Log, TEXT("MOBACharacter BeginPlay: HealthComponent TeamID was neutral. Assigned default TeamID=0 to %s"), *GetName());
+	}
+
+	// Ensure VisionSource follows the HealthComponent team
+	if (VisionSource && HealthComponent)
+	{
+		VisionSource->SetTeamID(HealthComponent->TeamID);
+	}
 }

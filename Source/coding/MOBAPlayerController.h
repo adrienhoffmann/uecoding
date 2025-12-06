@@ -15,6 +15,7 @@ class UPlayerStatsComponent;
 class UPlayerHUDWidget;
 class UUserWidget;
 class AMapPing;
+class UNiagaraSystem;
 
 UCLASS()
 class CODING_API AMOBAPlayerController : public APlayerController
@@ -114,6 +115,22 @@ public:
 	UFUNCTION(Server, Reliable, WithValidation)
 	void Server_RequestMoveTo(const FVector& WorldLocation);
 
+	// Server RPC to request selecting/targeting an actor for attack (server authoritative)
+	UFUNCTION(Server, Reliable, WithValidation)
+	void Server_RequestSetTarget(AActor* NewTarget);
+
+	// Server RPC to request a purchase from a shop actor
+	UFUNCTION(Server, Reliable, WithValidation, Category = "Shop")
+	void Server_RequestPurchase(class AShopActor* Shop, class UItemData* Item);
+
+	// Server RPC: spawn cursor effect at world location (called by client when right-clicking)
+	UFUNCTION(Server, Reliable, WithValidation)
+	void Server_SpawnCursorEffect(const FVector& WorldLocation);
+
+	// Multicast RPC to spawn the cursor effect on all clients
+	UFUNCTION(NetMulticast, Reliable)
+	void Multicast_SpawnCursorEffect(const FVector& WorldLocation);
+
 	// Client receives a navigation path (server->client) to display on minimap
 	UFUNCTION(Client, Reliable)
 	void Client_ReceiveNavPath(const TArray<FVector>& PathPoints);
@@ -129,6 +146,10 @@ public:
 	// Check if we're following a target to attack
 	UPROPERTY(BlueprintReadOnly, Category = "Combat")
 	bool bIsFollowingTarget;
+
+	// Maximum distance (in world units) to search for a shop when pressing the open shop hotkey
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shop")
+	float ShopOpenRange = 2000.0f;
 
 private:
 	AActor* PreviousHoveredActor;
@@ -174,4 +195,14 @@ private:
 	void HandleEdgeScroll(float DeltaTime);
 	void SpawnFreeCameraAt(const FVector& WorldLocation, const FRotator& WorldRotation);
 	void DestroyFreeCamera();
+
+	// Input handler: open nearest shop
+	void OnOpenShopPressed();
+
+	// Finds the closest shop to the controlled pawn, within ShopOpenRange, and opens it in the HUD
+	void OpenClosestShop();
+
+	// Niagara effect used for cursor clicks (set in BP or defaults)
+	UPROPERTY(EditAnywhere, Category = "Effects")
+	UNiagaraSystem* CursorClickEffect;
 };

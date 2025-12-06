@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
 #include "Net/UnrealNetwork.h"
+#include "ItemData.h"
 #include "PlayerStatsComponent.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnGoldChanged, int32, NewGold, int32, Delta);
@@ -158,6 +159,13 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Stats|XP")
 	void AddXP(int32 Amount);
+
+	// Apply passive item modifiers on the server
+	UFUNCTION(BlueprintCallable, Category = "Stats|Items")
+	void ApplyItemModifiers(const FItemStatModifier& Modifiers);
+
+	UFUNCTION(Server, Reliable, WithValidation, Category = "Stats|Server")
+	void Server_ApplyItemModifiers(const FItemStatModifier& Modifiers);
 
 	// ========== SERVER RPCs (authoritative) ==========
 	UFUNCTION(Server, Reliable, WithValidation, Category = "Stats|Server")

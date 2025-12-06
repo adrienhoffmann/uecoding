@@ -46,8 +46,8 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat")
 	bool bUseAttackAnimations;
 
-	// Current target
-	UPROPERTY(BlueprintReadOnly, Category = "Combat")
+	// Current target (replicated)
+	UPROPERTY(BlueprintReadOnly, Category = "Combat", ReplicatedUsing=OnRep_CurrentTarget)
 	AActor* CurrentTarget;
 
 	// Is currently attacking (animation playing)
@@ -101,4 +101,11 @@ private:
 
 	UFUNCTION()
 	void OnAttackAnimationEnded();
+
+	// Replication
+	UFUNCTION()
+	void OnRep_CurrentTarget();
+
+public:
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 };

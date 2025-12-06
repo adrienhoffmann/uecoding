@@ -1,6 +1,7 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
 #include "CombatComponent.h"
+#include "Net/UnrealNetwork.h"
 #include "CombatAnimComponent.h"
 #include "HealthComponent.h"
 #include "Projectile.h"
@@ -12,6 +13,9 @@
 UCombatComponent::UCombatComponent()
 {
 	PrimaryComponentTick.bCanEverTick = true;
+
+	// Enable replication for server authoritative combat
+	SetIsReplicatedByDefault(true);
 
 	// Default values - typical MOBA melee stats
 	AttackDamage = 50.0f;
@@ -50,6 +54,12 @@ void UCombatComponent::BeginPlay()
 void UCombatComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+	// Combat should be authoritative on the server only. Clients should not run attack logic.
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
 
 	// Don't start new attack if already attacking
 	if (bIsAttacking)
@@ -113,11 +123,20 @@ void UCombatComponent::SetTarget(AActor* NewTarget)
 		}
 	}
 
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		// Only server should set the authoritative target
+		return;
+	}
 	CurrentTarget = NewTarget;
 }
 
 void UCombatComponent::ClearTarget()
 {
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
 	CurrentTarget = nullptr;
 }
 
@@ -144,6 +163,12 @@ bool UCombatComponent::CanAttack() const
 
 void UCombatComponent::Attack()
 {
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		UE_LOG(LogCoding, Warning, TEXT("CombatComponent::Attack called on non-authority owner - ignoring"));
+		return;
+	}
+
 	if (!CurrentTarget || !CanAttack())
 	{
 		return;
@@ -178,6 +203,7 @@ void UCombatComponent::Attack()
 		bIsAttacking = false;
 	}
 
+	UE_LOG(LogCoding, Display, TEXT("CombatComponent::Attack: Owner=%s Target=%s IsServer=%d"), *GetOwner()->GetName(), CurrentTarget ? *CurrentTarget->GetName() : TEXT("NULL"), GetOwner() && GetOwner()->HasAuthority() ? 1 : 0);
 	OnAttackPerformed.Broadcast(CurrentTarget);
 }
 
@@ -193,6 +219,7 @@ float UCombatComponent::GetDistanceToTarget() const
 
 void UCombatComponent::PerformMeleeAttack()
 {
+	if (!GetOwner() || !GetOwner()->HasAuthority()) return;
 	if (!CurrentTarget)
 	{
 		return;
@@ -209,6 +236,7 @@ void UCombatComponent::PerformRangedAttack()
 {
 	UE_LOG(LogCoding, Verbose, TEXT("PerformRangedAttack called"));
 	
+	if (!GetOwner() || !GetOwner()->HasAuthority()) return;
 	if (!CurrentTarget)
 	{
 		UE_LOG(LogCoding, Verbose, TEXT("PerformRangedAttack: No target"));
@@ -223,6 +251,7 @@ void UCombatComponent::PerformRangedAttack()
 	}
 
 	AActor* Owner = GetOwner();
+	if (!Owner || !GetOwner()->HasAuthority()) return;
 	if (!Owner)
 	{
 		UE_LOG(LogCoding, Warning, TEXT("PerformRangedAttack: No owner"));
@@ -269,4 +298,24 @@ void UCombatComponent::OnRangedReleasePointReached()
 void UCombatComponent::OnAttackAnimationEnded()
 {
 	bIsAttacking = false;
+}
+
+void UCombatComponent::OnRep_CurrentTarget()
+{
+	// Clients can use this to update UI or visuals when the target changes
+	// For now, keep it simple and log the change
+	if (CurrentTarget)
+	{
+		UE_LOG(LogCoding, Verbose, TEXT("CombatComponent OnRep_CurrentTarget: New target %s"), *CurrentTarget->GetName());
+	}
+	else
+	{
+		UE_LOG(LogCoding, Verbose, TEXT("CombatComponent OnRep_CurrentTarget: Cleared target"));
+	}
+}
+
+void UCombatComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(UCombatComponent, CurrentTarget);
 }
