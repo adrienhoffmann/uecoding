@@ -20,7 +20,6 @@ void UShopItemWidget::NativeConstruct()
         BuyButton->OnClicked.AddDynamic(this, &UShopItemWidget::OnBuyButtonClicked);
     }
 
-    UE_LOG(LogTemp, Log, TEXT("ShopItemWidget: NativeConstruct on widget instance class='%s' ptr=%p"), *GetClass()->GetName(), this);
     // Refresh l'affichage si déjà initialisé
     if (ItemData)
     {
@@ -44,16 +43,17 @@ void UShopItemWidget::RefreshDisplay()
     }
 
     // Met à jour l'icône
-    if (ItemIcon && ItemData->Icon)
+        if (ItemIcon && ItemData->Icon)
     {
         FSlateBrush Brush;
         Brush.SetResourceObject(ItemData->Icon);
         Brush.ImageSize = FVector2D(64.0f, 64.0f);
-        ItemIcon->SetBrush(Brush);
+            ItemIcon->SetBrush(Brush);
+            ItemIcon->SetVisibility(ESlateVisibility::Visible);
     }
 
     // Met à jour le nom
-    if (ItemNameText)
+        if (ItemNameText)
     {
         FText Name = ItemData->DisplayName.IsEmpty() ? FText::FromName(*ItemData->GetFName().ToString()) : ItemData->DisplayName;
         if (ItemData->DisplayName.IsEmpty())
@@ -61,8 +61,8 @@ void UShopItemWidget::RefreshDisplay()
             // fallback to asset name
             Name = FText::FromString(ItemData->GetName());
         }
-        ItemNameText->SetText(Name);
-        UE_LOG(LogTemp, Log, TEXT("ShopItemWidget: RefreshDisplay set name '%s' for item asset %s"), *Name.ToString(), *ItemData->GetName());
+            ItemNameText->SetText(Name);
+            ItemNameText->SetVisibility(ESlateVisibility::Visible);
     }
     else
     {
@@ -70,13 +70,14 @@ void UShopItemWidget::RefreshDisplay()
     }
 
     // Met à jour le coût
-    if (ItemCostText)
+        if (ItemCostText)
     {
         ItemCostText->SetText(FText::AsNumber(ItemData->Cost));
+            ItemCostText->SetVisibility(ESlateVisibility::Visible);
     }
 
     // If no icon provided, optionally add a neutral tint or hide the icon
-    if (ItemIcon && !ItemData->Icon)
+        if (ItemIcon && !ItemData->Icon)
     {
         ItemIcon->SetVisibility(ESlateVisibility::Visible);
         ItemIcon->SetOpacity(0.5f);
@@ -85,6 +86,11 @@ void UShopItemWidget::RefreshDisplay()
     {
         UE_LOG(LogTemp, Warning, TEXT("ShopItemWidget: ItemIcon text is null for item %s (WidgetClass=%s)"), *ItemData->GetName(), *GetClass()->GetName());
     }
+        // Ensure buy button is visible (designer may hide it in blueprint)
+        if (BuyButton)
+        {
+            BuyButton->SetVisibility(ESlateVisibility::Visible);
+        }
 }
 
 bool UShopItemWidget::HasBoundNameText() const
@@ -96,11 +102,7 @@ void UShopItemWidget::OnBuyButtonClicked()
 {
     if (ItemData)
     {
-        UE_LOG(LogTemp, Log, TEXT("ShopItemWidget: Buy button clicked for item %s (cost=%d)"), *ItemData->DisplayName.ToString(), ItemData->Cost);
-    }
-    else
-    {
-        UE_LOG(LogTemp, Warning, TEXT("ShopItemWidget: Buy button clicked but ItemData is NULL"));
+        UE_LOG(LogTemp, Log, TEXT("SHOP: Buying item '%s' (cost=%d)"), *ItemData->DisplayName.ToString(), ItemData->Cost);
     }
     if (!ItemData || !ShopActor)
     {

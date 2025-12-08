@@ -11,6 +11,7 @@
 #include "Components/TextBlock.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/Border.h"
+#include "Components/SizeBox.h"
 #include "Components/CanvasPanelSlot.h"
 
 void UShopPanelWidget::NativeConstruct()
@@ -32,21 +33,18 @@ void UShopPanelWidget::NativeConstruct()
     {
         SetVisibility(ESlateVisibility::Collapsed);
     }
-    UE_LOG(LogTemp, Log, TEXT("ShopPanelWidget: NativeConstruct initialized"));
 
-    // Debug: report whether ShopItemWidgetClass is set on this instance
+    // Debug: report whether ShopItemWidgetClass is set
     if (ShopItemWidgetClass)
     {
-        UE_LOG(LogTemp, Log, TEXT("ShopPanelWidget: ShopItemWidgetClass = %s"), *ShopItemWidgetClass->GetName());
-        // Warn if ShopItemWidgetClass is the raw C++ class and not a Blueprint derived class
         if (ShopItemWidgetClass == UShopItemWidget::StaticClass())
         {
-            UE_LOG(LogTemp, Error, TEXT("ShopPanelWidget: ShopItemWidgetClass is set to the raw C++ class UShopItemWidget. You must set it to a Blueprint Widget (e.g. WBP_Shop) that inherits from ShopItemWidget!"));
+            UE_LOG(LogTemp, Error, TEXT("SHOP ERROR: ShopItemWidgetClass must be set to a Blueprint (e.g. WBP_Shop), not the raw C++ class!"));
         }
     }
     else
     {
-        UE_LOG(LogTemp, Warning, TEXT("ShopPanelWidget: ShopItemWidgetClass is not set on widget instance"));
+        UE_LOG(LogTemp, Warning, TEXT("SHOP: ShopItemWidgetClass is not set!"));
     }
 }
 
@@ -67,42 +65,29 @@ void UShopPanelWidget::OpenShop(AShopActor* Shop)
     if (UCanvasPanelSlot* CanvasSlot = UWidgetLayoutLibrary::SlotAsCanvasSlot(this))
     {
         CanvasSlot->SetZOrder(999);
-        UE_LOG(LogTemp, Log, TEXT("ShopPanelWidget: Brought canvas slot to front with ZOrder=999"));
     }
     else
     {
-        // Not in a canvas slot - try to force visibility by removing and re-adding to viewport
-        UE_LOG(LogTemp, Log, TEXT("ShopPanelWidget: Not in CanvasSlot; forcing AddToViewport"));
+        // Not in a canvas slot - force AddToViewport
         RemoveFromParent();
         AddToViewport(9999);
-        // Always attempt to center by using alignment and desired size
         if (GEngine && GEngine->GameViewport)
         {
             FVector2D ViewportSize;
             GEngine->GameViewport->GetViewportSize(ViewportSize);
-            // Use a default size that hopefully fits across common viewports
             FVector2D DefaultSize(800.f, 500.f);
             SetDesiredSizeInViewport(DefaultSize);
-            // Center the widget by setting alignment to middle and position to 0,0 in viewport
             SetAlignmentInViewport(FVector2D(0.5f, 0.5f));
             SetPositionInViewport(FVector2D::ZeroVector, false);
-            UE_LOG(LogTemp, Log, TEXT("ShopPanelWidget: Forced AddToViewport & centered with size %s (viewport %s)"), *DefaultSize.ToString(), *ViewportSize.ToString());
         }
         else
         {
-            // Fallback: set a desired size in case we can't read viewport
             SetDesiredSizeInViewport(FVector2D(800.f, 500.f));
             SetAlignmentInViewport(FVector2D(0.5f, 0.5f));
             SetPositionInViewport(FVector2D::ZeroVector, false);
-            UE_LOG(LogTemp, Log, TEXT("ShopPanelWidget: Forced AddToViewport (no viewport access) & centered with default size"));
         }
     }
-    if (GEngine)
-    {
-        GEngine->AddOnScreenDebugMessage(-1, 3.0f, FColor::Yellow, TEXT("ShopPanelWidget: OpenShop called"));
-    }
-
-    // Set focus and ensure UI is focusable so state changes and keyboard/mouse focus are correct
+    // Set focus and input mode for UI
     SetIsEnabled(true);
     SetIsFocusable(true);
     if (APlayerController* PC = GetOwningPlayer())
@@ -112,7 +97,6 @@ void UShopPanelWidget::OpenShop(AShopActor* Shop)
         Mode.SetHideCursorDuringCapture(false);
         PC->SetInputMode(Mode);
         PC->bShowMouseCursor = true;
-        UE_LOG(LogTemp, Log, TEXT("ShopPanelWidget: Set input mode to GameAndUI and showed mouse cursor"));
     }
 
     // Show explicit on-screen debug message with item count to help visual verification
@@ -124,19 +108,9 @@ void UShopPanelWidget::OpenShop(AShopActor* Shop)
 
     // Peuple la liste des items
     RefreshItems();
-    UE_LOG(LogTemp, Log, TEXT("ShopPanelWidget: OpenShop called for %s"), Shop ? *Shop->GetName() : TEXT("NULL"));
+    // OpenShop called; items refreshed and UI set up
 
-    // Debug: Log the actual rendered size of this widget
-    FVector2D DesiredSize = GetDesiredSize();
-    UE_LOG(LogTemp, Warning, TEXT("ShopPanelWidget: Widget DesiredSize = %s, Visibility = %d"), *DesiredSize.ToString(), (int32)GetVisibility());
-
-    // Force on-screen debug to confirm the shop panel visibility state
-    if (GEngine)
-    {
-        FString DebugMsg = FString::Printf(TEXT("SHOP PANEL: DesiredSize=(%.0f,%.0f) Visibility=%d IsInViewport=%d"),
-            DesiredSize.X, DesiredSize.Y, (int32)GetVisibility(), IsInViewport() ? 1 : 0);
-        GEngine->AddOnScreenDebugMessage(-1, 8.0f, FColor::Cyan, DebugMsg);
-    }
+    // End OpenShop UI setup
     
     // Try to apply a temporary background tint at runtime if no visible background exists to aid debugging
     if (WidgetTree)
@@ -146,14 +120,9 @@ void UShopPanelWidget::OpenShop(AShopActor* Shop)
         {
             // If there's no border background, try to wrap content into a border at runtime
             UBorder* AsBorder = Cast<UBorder>(Root);
-            if (!AsBorder)
-            {
-                UE_LOG(LogTemp, Log, TEXT("ShopPanelWidget: Root is not a Border; ensuring we add visual debug tint is left to designer"));
-            }
-            else
+            if (AsBorder)
             {
                 AsBorder->SetBrushColor(FLinearColor(0.0f, 0.2f, 0.6f, 0.6f));
-                UE_LOG(LogTemp, Log, TEXT("ShopPanelWidget: Applied debug tint to root Border"));
             }
         }
     }
@@ -167,14 +136,11 @@ void UShopPanelWidget::OpenShop(AShopActor* Shop)
             Header->SetText(FText::FromString(TEXT("DEBUG SHOP PANEL HEADER")));
             Header->SetColorAndOpacity(FSlateColor(FLinearColor::Yellow));
             ItemsScrollBox->InsertChildAt(0, Header);
-            UE_LOG(LogTemp, Log, TEXT("ShopPanelWidget: Inserted debug header into ItemsScrollBox"));
         }
     }
 
-    // CRITICAL: Force visibility to Visible at the very end of OpenShop
-    // This ensures NativeConstruct (which may have been called during AddToViewport) doesn't leave us Collapsed
+    // Ensure visibility
     SetVisibility(ESlateVisibility::Visible);
-    UE_LOG(LogTemp, Log, TEXT("ShopPanelWidget: OpenShop FINAL - forced Visibility to Visible (current=%d)"), (int32)GetVisibility());
 }
 
 void UShopPanelWidget::CloseShop()
@@ -200,10 +166,27 @@ void UShopPanelWidget::RefreshItems()
         return;
     }
 
-    UE_LOG(LogTemp, Log, TEXT("ShopPanelWidget: RefreshItems - %d available items. WrapBox=%s ScrollBox=%s"),
-        CurrentShop->ShopComponent->AvailableItems.Num(),
+    UE_LOG(LogTemp, Warning, TEXT("=== SHOP: RefreshItems - %d items available ==="), CurrentShop->ShopComponent->AvailableItems.Num());
+    UE_LOG(LogTemp, Warning, TEXT("SHOP: ScrollBox=%s WrapBox=%s ShopItemWidgetClass=%s"),
+        ItemsScrollBox ? TEXT("YES") : TEXT("NO"),
         ItemsWrapBox ? TEXT("YES") : TEXT("NO"),
-        ItemsScrollBox ? TEXT("YES") : TEXT("NO"));
+        ShopItemWidgetClass ? *ShopItemWidgetClass->GetName() : TEXT("NULL"));
+
+    // Log each available item
+    for (int32 i = 0; i < CurrentShop->ShopComponent->AvailableItems.Num(); ++i)
+    {
+        UItemData* ItmDbg = CurrentShop->ShopComponent->AvailableItems[i];
+        if (ItmDbg)
+        {
+            UE_LOG(LogTemp, Warning, TEXT("SHOP: Item[%d] = %s (DisplayName='%s', Cost=%d, Icon=%s)"),
+                i, *ItmDbg->GetName(), *ItmDbg->DisplayName.ToString(), ItmDbg->Cost,
+                ItmDbg->Icon ? *ItmDbg->Icon->GetName() : TEXT("NULL"));
+        }
+        else
+        {
+            UE_LOG(LogTemp, Warning, TEXT("SHOP: Item[%d] = NULL"), i);
+        }
+    }
 
     // Ajoute un widget pour chaque item disponible
     for (UItemData* Item : CurrentShop->ShopComponent->AvailableItems)
@@ -274,6 +257,16 @@ void UShopPanelWidget::AddItemWidget(UItemData* ItemData)
     // Initialise avec les données
     ItemWidget->InitializeItem(ItemData, CurrentShop);
 
+    // Force layout on the widget so it can compute desired size
+    // Ensure the widget has had a chance to compute layout before we inspect size
+    ItemWidget->ForceLayoutPrepass();
+
+    // Log detailed binding status
+    UE_LOG(LogTemp, Warning, TEXT("SHOP: ItemWidget for '%s' - HasNameText=%d, WidgetClass=%s"),
+        *ItemData->GetName(),
+        ItemWidget->HasBoundNameText() ? 1 : 0,
+        *ItemWidget->GetClass()->GetName());
+
     // Ajoute au container approprié
     // If the item widget didn't bind its children (labels/images), create a fallback visual entry so we can still see the item in the UI.
     bool bHasNameText = false;
@@ -295,8 +288,20 @@ void UShopPanelWidget::AddItemWidget(UItemData* ItemData)
 
     if (ItemsWrapBox)
     {
-        ItemsWrapBox->AddChild(ItemWidget);
-        UE_LOG(LogTemp, Log, TEXT("ShopPanelWidget: Added item widget to WrapBox for %s (Ptr=%p)"), *ItemData->DisplayName.ToString(), ItemData);
+        // Wrap item widget in a SizeBox to enforce minimum visible size
+        UWidget* WidgetToAdd = ItemWidget;
+        if (WidgetTree)
+        {
+            USizeBox* SizeBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+            if (SizeBox)
+            {
+                SizeBox->SetWidthOverride(200.f);
+                SizeBox->SetHeightOverride(64.f);
+                SizeBox->SetContent(ItemWidget);
+                WidgetToAdd = SizeBox;
+            }
+        }
+        ItemsWrapBox->AddChild(WidgetToAdd);
         // Append fallback text if binding failed
         if (!bHasNameText)
         {
@@ -318,12 +323,45 @@ void UShopPanelWidget::AddItemWidget(UItemData* ItemData)
         // Ensure item is definitely visible
         ItemWidget->SetVisibility(ESlateVisibility::Visible);
         ItemWidget->SetRenderOpacity(1.0f);
-        UE_LOG(LogTemp, Log, TEXT("ShopPanelWidget: ItemWidget visible=%d visibility=%d opacity=%.2f"), ItemWidget->IsVisible(), (int32)ItemWidget->GetVisibility(), ItemWidget->GetRenderOpacity());
+        // If the widget reports an extremely small desired size, provide a visible fallback
+        FVector2D WidgetDesired = ItemWidget->GetDesiredSize();
+        if (WidgetDesired.IsNearlyZero())
+        {
+            UE_LOG(LogTemp, Warning, TEXT("ShopPanelWidget: ItemWidget desired size is zero for %s; adding visual fallback border"), *ItemData->GetName());
+            if (WidgetTree)
+            {
+                UBorder* FallbackBorder = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+                UTextBlock* FallbackText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+                        if (FallbackBorder && FallbackText)
+                {
+                    FallbackText->SetText(FText::FromString(ItemData->DisplayName.IsEmpty() ? ItemData->GetName() : ItemData->DisplayName.ToString()));
+                    FallbackText->SetColorAndOpacity(FSlateColor(FLinearColor::White));
+                    FallbackBorder->SetPadding(FMargin(4.0f));
+                            FallbackBorder->SetContent(FallbackText);
+                    ItemsWrapBox->AddChildToWrapBox(FallbackBorder);
+                }
+            }
+        }
+        // Force a layout update on the container
+        ItemsWrapBox->ForceLayoutPrepass();
     }
     else if (ItemsScrollBox)
     {
-        ItemsScrollBox->AddChild(ItemWidget);
-        UE_LOG(LogTemp, Log, TEXT("ShopPanelWidget: Added item widget to ScrollBox for %s (Ptr=%p)"), *ItemData->DisplayName.ToString(), ItemData);
+        // Wrap item widget in a SizeBox to enforce minimum visible size
+        UWidget* WidgetToAdd2 = ItemWidget;
+        if (WidgetTree)
+        {
+            USizeBox* SizeBox2 = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+            if (SizeBox2)
+            {
+                SizeBox2->SetWidthOverride(200.f);
+                SizeBox2->SetHeightOverride(64.f);
+                SizeBox2->SetContent(ItemWidget);
+                WidgetToAdd2 = SizeBox2;
+            }
+        }
+        ItemsScrollBox->AddChild(WidgetToAdd2);
+        UE_LOG(LogTemp, Warning, TEXT("SHOP: >>> Added ItemWidget to ScrollBox for '%s'"), *ItemData->DisplayName.ToString());
         // Append fallback text if binding failed
         if (!bHasNameText)
         {
@@ -345,11 +383,31 @@ void UShopPanelWidget::AddItemWidget(UItemData* ItemData)
         // Ensure item is definitely visible
         ItemWidget->SetVisibility(ESlateVisibility::Visible);
         ItemWidget->SetRenderOpacity(1.0f);
-        UE_LOG(LogTemp, Log, TEXT("ShopPanelWidget: ItemWidget visible=%d visibility=%d opacity=%.2f"), ItemWidget->IsVisible(), (int32)ItemWidget->GetVisibility(), ItemWidget->GetRenderOpacity());
+        // If the widget reports an extremely small desired size, provide a visible fallback
+        FVector2D WidgetDesired2 = ItemWidget->GetDesiredSize();
+        if (WidgetDesired2.IsNearlyZero())
+        {
+            UE_LOG(LogTemp, Warning, TEXT("ShopPanelWidget: ItemWidget desired size is zero for %s; adding visual fallback border"), *ItemData->GetName());
+            if (WidgetTree)
+            {
+                UBorder* FallbackBorder = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+                UTextBlock* FallbackText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+                if (FallbackBorder && FallbackText)
+                {
+                    FallbackText->SetText(FText::FromString(ItemData->DisplayName.IsEmpty() ? ItemData->GetName() : ItemData->DisplayName.ToString()));
+                    FallbackText->SetColorAndOpacity(FSlateColor(FLinearColor::White));
+                    FallbackBorder->SetPadding(FMargin(4.0f));
+                    FallbackBorder->SetContent(FallbackText);
+                    ItemsScrollBox->AddChild(FallbackBorder);
+                }
+            }
+        }
+        // Force a layout update on the container
+        ItemsScrollBox->ForceLayoutPrepass();
     }
     else
     {
-        UE_LOG(LogTemp, Warning, TEXT("ShopPanelWidget: No container (WrapBox or ScrollBox) to add item widget!"));
+        UE_LOG(LogTemp, Warning, TEXT("SHOP: No container to add item widget!"));
     }
 }
 

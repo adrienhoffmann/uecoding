@@ -59,15 +59,11 @@ void AMOBAPlayerController::BeginPlay()
 {
 	Super::BeginPlay();
 
-	UE_LOG(LogTemp, Warning, TEXT("MOBA: BeginPlay called"));
-
 	if (UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(GetLocalPlayer()))
 	{
-		UE_LOG(LogTemp, Warning, TEXT("MOBA: Subsystem found"));
 		if (DefaultMappingContext)
 		{
 			Subsystem->AddMappingContext(DefaultMappingContext, 0);
-			UE_LOG(LogTemp, Warning, TEXT("MOBA: MappingContext added!"));
 		}
 		else
 		{
@@ -131,14 +127,10 @@ void AMOBAPlayerController::SetupInputComponent()
 {
 	Super::SetupInputComponent();
 
-	UE_LOG(LogTemp, Warning, TEXT("MOBA: SetupInputComponent called"));
-
 	if (UEnhancedInputComponent* EnhancedInputComponent = Cast<UEnhancedInputComponent>(InputComponent))
 	{
-		UE_LOG(LogTemp, Warning, TEXT("MOBA: EnhancedInputComponent found"));
 		if (SetDestinationClickAction)
 		{
-			UE_LOG(LogTemp, Warning, TEXT("MOBA: Binding SetDestinationClickAction"));
 			EnhancedInputComponent->BindAction(SetDestinationClickAction, ETriggerEvent::Started, this, &AMOBAPlayerController::OnInputStarted);
 			EnhancedInputComponent->BindAction(SetDestinationClickAction, ETriggerEvent::Triggered, this, &AMOBAPlayerController::OnSetDestinationTriggered);
 			EnhancedInputComponent->BindAction(SetDestinationClickAction, ETriggerEvent::Completed, this, &AMOBAPlayerController::OnSetDestinationReleased);
