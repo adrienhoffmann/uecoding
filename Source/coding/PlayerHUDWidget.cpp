@@ -156,6 +156,12 @@ void UPlayerHUDWidget::NativeConstruct()
     }
     // Log current inversion state so it's obvious in the output
     UE_LOG(LogCoding, Log, TEXT("PlayerHUDWidget: bInvertMinimapX=%d bInvertMinimapY=%d bAutoDetectMinimapY=%d"), bInvertMinimapX?1:0, bInvertMinimapY?1:0, bAutoDetectMinimapY?1:0);
+
+    // Debug: Report whether a ShopPanel reference or template classes are set
+    UE_LOG(LogTemp, Log, TEXT("PlayerHUDWidget: ShopPanel pointer=%s ShopPanelClass=%s DebugShopOverlayClass=%s"),
+        ShopPanel ? *ShopPanel->GetName() : TEXT("NULL"),
+        ShopPanelClass ? *ShopPanelClass->GetName() : TEXT("NULL"),
+        DebugShopOverlayClass ? *DebugShopOverlayClass->GetName() : TEXT("NULL"));
 }
 
 // ===== Minimap Functions =====
@@ -1219,19 +1225,30 @@ void UPlayerHUDWidget::OpenShop(AShopActor* Shop)
         }
 
         // If we created a runtime panel or the designer panel is present, also create a debug overlay (to ensure UI is visible)
-        if (!DebugShopOverlayInstance && DebugShopOverlayClass)
+        if (!DebugShopOverlayInstance)
         {
-            UUserWidget* W = CreateWidget(GetOwningPlayer(), DebugShopOverlayClass);
-            DebugShopOverlayInstance = Cast<UDebugShopOverlayWidget>(W);
-            if (DebugShopOverlayInstance)
+            if (DebugShopOverlayClass)
             {
-                DebugShopOverlayInstance->AddToViewport(10000);
-                UE_LOG(LogTemp, Log, TEXT("PlayerHUDWidget: Created DebugShopOverlayInstance and added to viewport"));
-                // set item count if possible
-                if (Shop && Shop->ShopComponent)
+                UUserWidget* W = CreateWidget(GetOwningPlayer(), DebugShopOverlayClass);
+                DebugShopOverlayInstance = Cast<UDebugShopOverlayWidget>(W);
+                if (DebugShopOverlayInstance)
                 {
-                    DebugShopOverlayInstance->SetItemCount(Shop->ShopComponent->AvailableItems.Num());
+                    DebugShopOverlayInstance->AddToViewport(10000);
+                    UE_LOG(LogTemp, Log, TEXT("PlayerHUDWidget: Created DebugShopOverlayInstance and added to viewport"));
                 }
+                else
+                {
+                    UE_LOG(LogTemp, Warning, TEXT("PlayerHUDWidget: DebugShopOverlayClass exists but created instance does not cast to UDebugShopOverlayWidget"));
+                }
+            }
+            else
+            {
+                UE_LOG(LogTemp, Warning, TEXT("PlayerHUDWidget: DebugShopOverlayClass is not set - no debug overlay created"));
+            }
+            // set item count if possible
+            if (DebugShopOverlayInstance && Shop && Shop->ShopComponent)
+            {
+                DebugShopOverlayInstance->SetItemCount(Shop->ShopComponent->AvailableItems.Num());
             }
         }
     }

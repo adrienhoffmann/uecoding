@@ -37,6 +37,16 @@ public:
     UPROPERTY(BlueprintReadOnly, Category = "Shop")
     AShopActor* ShopActor;
 
+    // Returns whether the name text is bound in this widget (BindWidget succeeded in blueprint)
+    UFUNCTION(BlueprintCallable, Category = "Shop")
+    bool HasBoundNameText() const;
+
+    
+
+    
+
+    
+
 protected:
     // Image de l'icône de l'item
     UPROPERTY(meta = (BindWidgetOptional))
@@ -62,4 +72,6 @@ private:
 
     // Met à jour l'affichage visuel depuis ItemData
     void RefreshDisplay();
+
+    
 };

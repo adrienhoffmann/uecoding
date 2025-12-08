@@ -20,6 +20,7 @@ void UShopItemWidget::NativeConstruct()
         BuyButton->OnClicked.AddDynamic(this, &UShopItemWidget::OnBuyButtonClicked);
     }
 
+    UE_LOG(LogTemp, Log, TEXT("ShopItemWidget: NativeConstruct on widget instance class='%s' ptr=%p"), *GetClass()->GetName(), this);
     // Refresh l'affichage si déjà initialisé
     if (ItemData)
     {
@@ -54,8 +55,18 @@ void UShopItemWidget::RefreshDisplay()
     // Met à jour le nom
     if (ItemNameText)
     {
-        FText Name = ItemData->DisplayName.IsEmpty() ? FText::FromString(TEXT("Unknown Item")) : ItemData->DisplayName;
+        FText Name = ItemData->DisplayName.IsEmpty() ? FText::FromName(*ItemData->GetFName().ToString()) : ItemData->DisplayName;
+        if (ItemData->DisplayName.IsEmpty())
+        {
+            // fallback to asset name
+            Name = FText::FromString(ItemData->GetName());
+        }
         ItemNameText->SetText(Name);
+        UE_LOG(LogTemp, Log, TEXT("ShopItemWidget: RefreshDisplay set name '%s' for item asset %s"), *Name.ToString(), *ItemData->GetName());
+    }
+    else
+    {
+        UE_LOG(LogTemp, Warning, TEXT("ShopItemWidget: ItemNameText is null for item %s (WidgetClass=%s)"), *ItemData->GetName(), *GetClass()->GetName());
     }
 
     // Met à jour le coût
@@ -70,6 +81,15 @@ void UShopItemWidget::RefreshDisplay()
         ItemIcon->SetVisibility(ESlateVisibility::Visible);
         ItemIcon->SetOpacity(0.5f);
     }
+    else if (!ItemIcon)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("ShopItemWidget: ItemIcon text is null for item %s (WidgetClass=%s)"), *ItemData->GetName(), *GetClass()->GetName());
+    }
+}
+
+bool UShopItemWidget::HasBoundNameText() const
+{
+    return ItemNameText != nullptr;
 }
 
 void UShopItemWidget::OnBuyButtonClicked()
