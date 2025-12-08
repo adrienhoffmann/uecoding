@@ -51,6 +51,18 @@ void UShopComponent::HandlePurchase(APlayerController* Buyer, UItemData* Item)
     UPlayerStatsComponent* Stats = MPC->GetPlayerStatsComponent();
     if (!Stats) return;
 
+    // Check inventory capacity (do this before spending gold to avoid refund edge cases)
+    UInventoryComponent* InvCandidate = nullptr;
+    if (MPC)
+    {
+        InvCandidate = MPC->GetPlayerInventoryComponent();
+    }
+    if (InvCandidate && !InvCandidate->HasSpace())
+    {
+        UE_LOG(LogCoding, Display, TEXT("Shop: Buyer %s inventory full - cannot purchase %s"), *Buyer->GetName(), *Item->DisplayName.ToString());
+        return;
+    }
+
     // Check gold and spend
     if (Stats->Gold < Item->Cost)
     {

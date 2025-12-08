@@ -27,6 +27,9 @@ public:
     bool RemoveItemAt(int32 SlotIndex);
 
     UFUNCTION(BlueprintCallable, Category = "Inventory")
+    bool HasSpace() const { return Items.Num() < MaxSlots; }
+
+    UFUNCTION(BlueprintCallable, Category = "Inventory")
     const TArray<UItemData*>& GetItems() const { return Items; }
 
     UPROPERTY(BlueprintAssignable, Category = "Inventory")
