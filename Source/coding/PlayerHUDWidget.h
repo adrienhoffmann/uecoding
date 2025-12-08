@@ -269,8 +269,27 @@ private:
         float Size;
         TWeakObjectPtr<AActor> OwnerActor;
         int32 TeamID;  // For fog of war visibility check
+        bool bGhost = false;  // True if icon is a "ghost" (explored but not currently visible)
     };
     TArray<FMinimapIcon> CachedIcons;
+
+    // ===== FOW + Minimap Integration =====
+    // Last known positions of enemies (for ghost icons when explored but not visible)
+    TMap<TWeakObjectPtr<AActor>, FVector> LastKnownPositions;
+    // Timestamps when each actor was last seen (to expire ghost icons after some time)
+    TMap<TWeakObjectPtr<AActor>, double> LastSeenTimes;
+
+    // If true, enemies in explored-but-not-visible areas show as faded ghost icons
+    UPROPERTY(EditAnywhere, Category = "Minimap|FOW")
+    bool bShowExploredAsGhost = true;
+
+    // Alpha multiplier for ghost icons (faded appearance)
+    UPROPERTY(EditAnywhere, Category = "Minimap|FOW")
+    float ExploredGhostAlpha = 0.35f;
+
+    // How long (seconds) to keep showing a ghost icon after losing sight of an enemy (0 = forever until map changes)
+    UPROPERTY(EditAnywhere, Category = "Minimap|FOW")
+    float LastKnownPositionExpirySeconds = 8.f;
 
     // Registered minimap components (avoid expensive world scan each tick)
     TArray<TWeakObjectPtr<class UMinimapComponent>> RegisteredMinimapComponents;

@@ -259,7 +259,31 @@ void UPlayerHUDWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime
     }
 
     // Collect minimap icons from registered components (faster than scanning all actors)
+    // Apply FOW visibility: visible enemies show normally, explored-only show as ghosts
     CachedIcons.Empty();
+
+    // Clean up expired last-known positions
+    if (LastKnownPositionExpirySeconds > 0.f)
+    {
+        const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+        TArray<TWeakObjectPtr<AActor>> ToRemove;
+        for (auto& Pair : LastSeenTimes)
+        {
+            if (!Pair.Key.IsValid() || (Now - Pair.Value) > LastKnownPositionExpirySeconds)
+            {
+                ToRemove.Add(Pair.Key);
+            }
+        }
+        for (auto& Key : ToRemove)
+        {
+            LastSeenTimes.Remove(Key);
+            LastKnownPositions.Remove(Key);
+        }
+    }
+
+    // Track which actors we've added icons for (to add ghost icons for non-visible ones at end)
+    TSet<TWeakObjectPtr<AActor>> AddedActors;
+
     for (TWeakObjectPtr<UMinimapComponent>& WeakComp : RegisteredMinimapComponents)
     {
         if (!WeakComp.IsValid()) continue;
@@ -268,14 +292,74 @@ void UPlayerHUDWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime
         AActor* Owner = MC->GetOwner();
         if (!Owner) continue;
 
-        FMinimapIcon I;
-        I.WorldLocation = Owner->GetActorLocation();
-        I.OwnerActor = Owner;
-        I.Normalized = WorldToMinimapNormalized(I.WorldLocation);
-        I.Color = MC->IconColor;
-        I.Size = MC->IconSize > 0 ? MC->IconSize : 6.0f;
-        I.TeamID = MC->TeamID;
-        CachedIcons.Add(I);
+        const FVector ActorLoc = Owner->GetActorLocation();
+        const int32 OwnerTeamID = MC->TeamID;
+        const bool bIsEnemy = (OwnerTeamID != LocalPlayerTeamID);
+
+        // Default: not ghost, visible
+        bool bShouldShow = true;
+        bool bAsGhost = false;
+
+        // Check FOW visibility for enemies
+        if (bIsEnemy && FogManager)
+        {
+            const bool bVisible = FogManager->IsLocationVisibleToTeam(ActorLoc, LocalPlayerTeamID);
+            const bool bExplored = FogManager->IsLocationExploredByTeam(ActorLoc, LocalPlayerTeamID);
+
+            if (bVisible)
+            {
+                // Enemy is visible -> show normally and update last known position
+                bShouldShow = true;
+                bAsGhost = false;
+                LastKnownPositions.Add(Owner, ActorLoc);
+                LastSeenTimes.Add(Owner, GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0);
+            }
+            else if (bShowExploredAsGhost && bExplored)
+            {
+                // Enemy is in explored area but not visible -> show as ghost at last known position
+                if (FVector* LastPos = LastKnownPositions.Find(Owner))
+                {
+                    bShouldShow = true;
+                    bAsGhost = true;
+                    // Use last known position, not current
+                    FMinimapIcon I;
+                    I.WorldLocation = *LastPos;
+                    I.OwnerActor = Owner;
+                    I.Normalized = WorldToMinimapNormalized(*LastPos);
+                    I.Color = MC->IconColor;
+                    I.Size = MC->IconSize > 0 ? MC->IconSize : 6.0f;
+                    I.TeamID = OwnerTeamID;
+                    I.bGhost = true;
+                    CachedIcons.Add(I);
+                    AddedActors.Add(Owner);
+                    continue; // Skip normal add below
+                }
+                else
+                {
+                    // No last known position -> don't show at all
+                    bShouldShow = false;
+                }
+            }
+            else
+            {
+                // Not visible, not explored (or ghost disabled) -> don't show
+                bShouldShow = false;
+            }
+        }
+
+        if (bShouldShow)
+        {
+            FMinimapIcon I;
+            I.WorldLocation = ActorLoc;
+            I.OwnerActor = Owner;
+            I.Normalized = WorldToMinimapNormalized(I.WorldLocation);
+            I.Color = MC->IconColor;
+            I.Size = MC->IconSize > 0 ? MC->IconSize : 6.0f;
+            I.TeamID = OwnerTeamID;
+            I.bGhost = bAsGhost;
+            CachedIcons.Add(I);
+            AddedActors.Add(Owner);
+        }
     }
 
     // Auto-detect WorldBoundsHalfSize based on registered minimap component locations if requested
@@ -871,18 +955,19 @@ int32 UPlayerHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& All
     // Draw minimap icons (allies, minions, towers)
     for (const FMinimapIcon& Icon : CachedIcons)
     {
-        // Fog of War visibility check: hide enemy icons if not in local player's vision
-        if (Icon.TeamID != LocalPlayerTeamID)
+        // Visibility is already filtered in NativeTick with FOW checks
+        // Ghost icons will have reduced alpha
+
+        FLinearColor DrawColor = Icon.Color;
+        if (Icon.bGhost)
         {
-            // This is an enemy icon - check fog of war
-            if (FogManager)
-            {
-                if (!FogManager->IsLocationVisibleToTeam(Icon.WorldLocation, LocalPlayerTeamID))
-                {
-                    // Enemy not in our vision - skip drawing this icon
-                    continue;
-                }
-            }
+            // Apply faded alpha for ghost icons (explored but not visible)
+            DrawColor.A *= ExploredGhostAlpha;
+            // Optional: desaturate ghost icons slightly for visual distinction
+            float Luminance = 0.299f * DrawColor.R + 0.587f * DrawColor.G + 0.114f * DrawColor.B;
+            DrawColor.R = FMath::Lerp(DrawColor.R, Luminance, 0.5f);
+            DrawColor.G = FMath::Lerp(DrawColor.G, Luminance, 0.5f);
+            DrawColor.B = FMath::Lerp(DrawColor.B, Luminance, 0.5f);
         }
 
         FVector2D Norm = Icon.Normalized;
@@ -907,7 +992,7 @@ int32 UPlayerHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& All
                 MapGeometry.ToPaintGeometry(),
                 BoxPoints,
                 ESlateDrawEffect::None,
-                Icon.Color,
+                DrawColor,
                 true,
                 6.0f
             );
@@ -924,7 +1009,7 @@ int32 UPlayerHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& All
                 MapGeometry.ToPaintGeometry(TopLeft, BoxSize),
                 WhiteBrush,
                 ESlateDrawEffect::None,
-                Icon.Color
+                DrawColor
             );
             RetLayer += 1;
         }
