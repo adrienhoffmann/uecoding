@@ -134,6 +134,12 @@ protected:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap")
     bool bAutoDetectMinimapY = false;
 
+        // Minimap debug helpers
+        UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap")
+        bool bShowMinimapDebugLabels = false;
+        UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap")
+        bool bShowMinimapDebugOutline = false;
+
     // Automatically detect world bounds from registered minimap components (if true)
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap")
     bool bAutoDetectWorldBounds = true;

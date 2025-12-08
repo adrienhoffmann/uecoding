@@ -766,11 +766,21 @@ int32 UPlayerHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& All
         return RetLayer;
     }
 
+    // Debug: log MapImage geometry and widget transforms if requested
+    if (bShowMinimapDebugLabels)
+    {
+        FVector2D AbsPos = MapGeometry.GetAbsolutePosition();
+        FVector2D AbsSize = MapGeometry.GetAbsoluteSize();
+        FVector2D LocalSize = MapGeometry.GetLocalSize();
+        FVector2D Scale = MapGeometry.GetAccumulatedLayoutTransform().GetScale();
+        UE_LOG(LogCoding, Display, TEXT("PlayerHUDWidget: MapGeometry AbsPos=(%.1f,%.1f) AbsSize=(%.1f,%.1f) LocalSize=(%.1f,%.1f) Scale=(%.3f,%.3f)"), AbsPos.X, AbsPos.Y, AbsSize.X, AbsSize.Y, LocalSize.X, LocalSize.Y, Scale.X, Scale.Y);
+    }
+
     const float MarkerSize = 8.0f;
 
     // Debug: force-draw helpers (temporary)
     const int32 DebugLayerOffset = 1000; // draw well above normal UI for visibility while debugging
-    const bool bForceDebugDraw = true;
+    const bool bForceDebugDraw = (bShowMinimapDebugOutline || bShowMinimapDebugLabels);
     // Draw pings as small crosses on the minimap
     for (TWeakObjectPtr<AMapPing> WeakPing : CachedPings)
     {
@@ -778,6 +788,14 @@ int32 UPlayerHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& All
         AMapPing* Ping = WeakPing.Get();
         FVector2D Norm = WorldToMinimapNormalized(Ping->PingLocation);
         FVector2D PixelPos = FVector2D(Norm.X * Size.X, Norm.Y * Size.Y);
+        // Clamp PixelPos to minimap bounds to avoid accidental off-by-one outside drawing area
+        bool bOutOfBounds = false;
+        if (PixelPos.X < 0.0f || PixelPos.Y < 0.0f || PixelPos.X > Size.X || PixelPos.Y > Size.Y)
+        {
+            bOutOfBounds = true;
+            PixelPos.X = FMath::Clamp(PixelPos.X, 0.0f, Size.X);
+            PixelPos.Y = FMath::Clamp(PixelPos.Y, 0.0f, Size.Y);
+        }
 
         // Lines for cross
         TArray<FVector2D> LinePoints1;
@@ -895,29 +913,24 @@ int32 UPlayerHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& All
         }
         else
         {
-            TArray<FVector2D> Box;
-            Box.Add(PixelPos + FVector2D(-S, -S));
-            Box.Add(PixelPos + FVector2D(S, -S));
-            Box.Add(PixelPos + FVector2D(S, S));
-            Box.Add(PixelPos + FVector2D(-S, S));
-            Box.Add(PixelPos + FVector2D(-S, -S));
-
-            FSlateDrawElement::MakeLines(
+            // Draw a filled box using MakeBox centered on the PixelPos
+            const FSlateBrush* WhiteBrush = FCoreStyle::Get().GetBrush(TEXT("WhiteBrush"));
+            FVector2D BoxSize(2.0f * S, 2.0f * S);
+            FVector2D TopLeft = PixelPos - BoxSize * 0.5f;
+            FSlateDrawElement::MakeBox(
                 OutDrawElements,
                 RetLayer + 1,
-                MapGeometry.ToPaintGeometry(),
-                Box,
+                MapGeometry.ToOffsetPaintGeometry(TopLeft, BoxSize),
+                WhiteBrush,
                 ESlateDrawEffect::None,
-                Icon.Color,
-                true,
-                2.0f
+                Icon.Color
             );
             RetLayer += 1;
         }
     }
 
     // Debug: draw a visible border around the minimap area so we can see where MapImage is located
-    if (bForceDebugDraw)
+    if (bShowMinimapDebugOutline)
     {
         TArray<FVector2D> RectPoints;
         RectPoints.Add(FVector2D(0.0f, 0.0f));
@@ -942,7 +955,9 @@ int32 UPlayerHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& All
     const int32 MaxLabels = 8;
     FSlateFontInfo FontInfo = FCoreStyle::Get().GetFontStyle(TEXT("NormalFont"));
     int32 LabelCount = FMath::Min(CachedIcons.Num(), MaxLabels);
-    for (int32 i = 0; i < LabelCount; ++i)
+    if (bShowMinimapDebugLabels)
+    {
+        for (int32 i = 0; i < LabelCount; ++i)
     {
         const FMinimapIcon& Icon = CachedIcons[i];
         FVector2D Norm = Icon.Normalized;
@@ -959,16 +974,17 @@ int32 UPlayerHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& All
             Label = FString::Printf(TEXT("%d"), i);
         }
 
-        FSlateDrawElement::MakeText(
-            OutDrawElements,
-            RetLayer + 1,
-            MapGeometry.ToOffsetPaintGeometry(PixelPos + FVector2D(6.0f, 0.0f)),
-            FText::FromString(Label),
-            FontInfo,
-            ESlateDrawEffect::None,
-            FLinearColor::White
-        );
+            FSlateDrawElement::MakeText(
+                OutDrawElements,
+                RetLayer + 1,
+                MapGeometry.ToOffsetPaintGeometry(PixelPos + FVector2D(6.0f, 0.0f)),
+                FText::FromString(Label),
+                FontInfo,
+                ESlateDrawEffect::None,
+                FLinearColor::White
+            );
         RetLayer += 1;
+        }
     }
 
     // Draw destruction marks
