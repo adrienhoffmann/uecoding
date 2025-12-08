@@ -7,6 +7,7 @@
 #include "CombatAnimComponent.h"
 #include "FogOfWarPostProcess.h"
 #include "VisionSourceComponent.h"
+#include "InventoryComponent.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "Camera/CameraComponent.h"
 #include "Logging.h"
@@ -18,6 +19,7 @@ AMOBACharacter::AMOBACharacter()
 	// Create components natively (stable across recompiles, like EnemyCharacter does)
 	HealthComponent = CreateDefaultSubobject<UHealthComponent>(TEXT("HealthComponent"));
 	PlayerStatsComponent = CreateDefaultSubobject<UPlayerStatsComponent>(TEXT("PlayerStatsComponent"));
+	InventoryComponent = CreateDefaultSubobject<UInventoryComponent>(TEXT("InventoryComponent"));
 	CombatComponent = CreateDefaultSubobject<UCombatComponent>(TEXT("CombatComponent"));
 	CombatAnimComponent = CreateDefaultSubobject<UCombatAnimComponent>(TEXT("CombatAnimComponent"));
 

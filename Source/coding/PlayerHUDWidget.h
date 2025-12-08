@@ -30,6 +30,10 @@ public:
     UFUNCTION(BlueprintCallable, Category = "HUD")
     void UpdateFromStats(UPlayerStatsComponent* Stats);
 
+    // Refresh the 6 item slots UI with current inventory items
+    UFUNCTION(BlueprintCallable, Category = "Inventory")
+    void RefreshInventory(const TArray<UItemData*>& Items);
+
     UFUNCTION(BlueprintCallable, Category = "HUD")
     void ShowStatsPopup();
 

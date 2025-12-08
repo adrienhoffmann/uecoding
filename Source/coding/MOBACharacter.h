@@ -8,6 +8,7 @@
 
 class UHealthComponent;
 class UPlayerStatsComponent;
+class UInventoryComponent;
 class UCombatComponent;
 class UCombatAnimComponent;
 class USpringArmComponent;
@@ -41,6 +42,9 @@ public:
 	UPlayerStatsComponent* PlayerStatsComponent;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	class UInventoryComponent* InventoryComponent;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	UCombatComponent* CombatComponent;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Combat")
@@ -61,6 +65,9 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Health")
 	UHealthComponent* GetHealthComponent() const { return HealthComponent; }
+
+	UFUNCTION(BlueprintPure, Category = "Inventory")
+	UInventoryComponent* GetInventoryComponent() const { return InventoryComponent; }
 
 	UFUNCTION(BlueprintPure, Category = "Combat")
 	UCombatComponent* GetCombatComponent() const { return CombatComponent; }

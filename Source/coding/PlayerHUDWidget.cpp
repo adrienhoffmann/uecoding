@@ -33,6 +33,8 @@
 #include "ShopComponent.h"
 #include "ItemData.h"
 #include "ShopPanelWidget.h"
+#include "InventoryComponent.h"
+#include "Blueprint/WidgetTree.h"
 
 void UPlayerHUDWidget::UpdateFromStats(UPlayerStatsComponent* Stats)
 {
@@ -1170,6 +1172,41 @@ void UPlayerHUDWidget::RequestPurchase(AShopActor* Shop, UItemData* Item)
             // Call server RPC on playercontroller to request purchase from the shop
             MPC->Server_RequestPurchase(Shop, Item);
         }
+    }
+}
+
+void UPlayerHUDWidget::RefreshInventory(const TArray<UItemData*>& Items)
+{
+    if (!ItemsBox)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("PlayerHUDWidget::RefreshInventory: ItemsBox is null"));
+        return;
+    }
+
+    ItemsBox->ClearChildren();
+    const int32 MaxSlots = 6;
+    for (int32 SlotIndex=0; SlotIndex < MaxSlots; ++SlotIndex)
+    {
+        UImage* SlotImage = nullptr;
+        if (WidgetTree)
+        {
+            SlotImage = WidgetTree->ConstructWidget<UImage>(UImage::StaticClass());
+        }
+        else
+        {
+            SlotImage = NewObject<UImage>(this);
+            if (!SlotImage) continue;
+        }
+
+        if (SlotIndex < Items.Num() && Items[SlotIndex])
+        {
+            if (Items[SlotIndex]->Icon)
+            {
+                SlotImage->SetBrushFromTexture(Items[SlotIndex]->Icon);
+            }
+        }
+
+        ItemsBox->AddChildToHorizontalBox(SlotImage);
     }
 }
 

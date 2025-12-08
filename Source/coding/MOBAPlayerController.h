@@ -23,6 +23,9 @@ class CODING_API AMOBAPlayerController : public APlayerController
 	GENERATED_BODY()
 
 public:
+	// Refresh the HUD inventory display from controller (safe to call from other classes)
+	UFUNCTION(BlueprintCallable, Category = "Inventory")
+	void RefreshHUDInventory();
 	AMOBAPlayerController();
 
 	// Move the camera to a world location (used by minimap clicks).
@@ -107,6 +110,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Stats")
 	UPlayerStatsComponent* GetPlayerStatsComponent() const;
 
+	// Convenience: get the InventoryComponent from the controlled pawn
+	UFUNCTION(BlueprintCallable, Category = "Inventory")
+	class UInventoryComponent* GetPlayerInventoryComponent() const;
+
 	// Server RPC to request a ping spawn at world location
 	UFUNCTION(Server, Reliable, WithValidation)
 	void Server_RequestPing(const FVector& WorldLocation, EMapPingType PingType);
@@ -174,6 +181,10 @@ private:
 	// Handler called when stats change (bound to PlayerStatsComponent->OnStatsChanged)
 	UFUNCTION()
 	void OnStatsChanged_Handler();
+
+	// Handler called when inventory changes
+	UFUNCTION()
+	void OnInventoryChanged_Handler();
 
 	// Health / Mana event handlers (signatures match the component delegates)
 	UFUNCTION()

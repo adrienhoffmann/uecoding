@@ -1,6 +1,7 @@
 #include "ShopComponent.h"
 #include "MOBAPlayerController.h"
 #include "PlayerStatsComponent.h"
+#include "InventoryComponent.h"
 #include "Net/UnrealNetwork.h"
 #include "Logging.h"
 
@@ -62,4 +63,25 @@ void UShopComponent::HandlePurchase(APlayerController* Buyer, UItemData* Item)
     Stats->ApplyItemModifiers(Item->Modifier);
 
     UE_LOG(LogCoding, Display, TEXT("Shop: Buyer %s purchased %s"), *Buyer->GetName(), *Item->DisplayName.ToString());
+
+    // Add item to buyer's inventory component (if present)
+    if (MPC)
+    {
+        UInventoryComponent* Inv = MPC->GetPlayerInventoryComponent();
+        if (Inv)
+        {
+            if (Inv->AddItem(Item))
+            {
+                UE_LOG(LogCoding, Display, TEXT("Shop: Added %s to %s inventory"), *Item->GetName(), *Buyer->GetName());
+            }
+            else
+            {
+                UE_LOG(LogCoding, Warning, TEXT("Shop: Failed to add %s to %s inventory (full?)"), *Item->GetName(), *Buyer->GetName());
+            }
+        }
+        else
+        {
+            UE_LOG(LogCoding, Warning, TEXT("Shop: Buyer %s has no InventoryComponent"), *Buyer->GetName());
+        }
+    }
 }

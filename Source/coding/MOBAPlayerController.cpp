@@ -1,6 +1,7 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
 #include "MOBAPlayerController.h"
+#include "InventoryComponent.h"
 #include "ShopActor.h"
 #include "ShopComponent.h"
 #include "MOBACharacter.h"
@@ -108,6 +109,18 @@ void AMOBAPlayerController::BeginPlay()
 				if (UAbilityComponent* AC = P->FindComponentByClass<UAbilityComponent>())
 				{
 					AC->OnManaChanged.AddDynamic(this, &AMOBAPlayerController::OnManaChanged_Handler);
+				}
+			}
+
+			// Bind inventory changed for UI updates
+			UInventoryComponent* Inv = GetPlayerInventoryComponent();
+			if (Inv)
+			{
+				Inv->OnInventoryChanged.AddDynamic(this, &AMOBAPlayerController::OnInventoryChanged_Handler);
+				// Initial populate
+				if (PlayerHUDWidget)
+				{
+					PlayerHUDWidget->RefreshInventory(Inv->GetItems());
 				}
 			}
 		}
@@ -694,6 +707,22 @@ void AMOBAPlayerController::OnStatsChanged_Handler()
 	}
 }
 
+void AMOBAPlayerController::OnInventoryChanged_Handler()
+{
+	if (!PlayerHUDWidget) return;
+	UInventoryComponent* Inv = GetPlayerInventoryComponent();
+	if (!Inv) return;
+	PlayerHUDWidget->RefreshInventory(Inv->GetItems());
+}
+
+void AMOBAPlayerController::RefreshHUDInventory()
+{
+	if (!PlayerHUDWidget) return;
+	UInventoryComponent* Inv = GetPlayerInventoryComponent();
+	if (!Inv) return;
+	PlayerHUDWidget->RefreshInventory(Inv->GetItems());
+}
+
 void AMOBAPlayerController::OnHealthChanged_Handler(float Health, float MaxHealth, float DamageTaken)
 {
 	// Forward to the generic stats handler to update HUD
@@ -1025,6 +1054,19 @@ UPlayerStatsComponent* AMOBAPlayerController::GetPlayerStatsComponent() const
 
 	// Fallback: FindComponentByClass (for BP-only pawns)
 	return ControlledPawn->FindComponentByClass<UPlayerStatsComponent>();
+}
+
+UInventoryComponent* AMOBAPlayerController::GetPlayerInventoryComponent() const
+{
+	APawn* ControlledPawn = GetPawn();
+	if (!ControlledPawn) return nullptr;
+
+	if (AMOBACharacter* MOBAChar = Cast<AMOBACharacter>(ControlledPawn))
+	{
+		return MOBAChar->InventoryComponent;
+	}
+
+	return ControlledPawn->FindComponentByClass<UInventoryComponent>();
 }
 
 void AMOBAPlayerController::SelectTarget(AActor* NewTarget)
