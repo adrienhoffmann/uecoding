@@ -1212,36 +1212,31 @@ void UPlayerHUDWidget::RequestPurchase(AShopActor* Shop, UItemData* Item)
 
 void UPlayerHUDWidget::RefreshInventory(const TArray<UItemData*>& Items)
 {
-    if (!ItemsBox)
-    {
-        UE_LOG(LogTemp, Warning, TEXT("PlayerHUDWidget::RefreshInventory: ItemsBox is null"));
-        return;
-    }
+    // Array of the 6 item slot images
+    UImage* Slots[6] = { Item_1, Item_2, Item_3, Item_4, Item_5, Item_6 };
 
-    ItemsBox->ClearChildren();
-    const int32 MaxSlots = 6;
-    for (int32 SlotIndex=0; SlotIndex < MaxSlots; ++SlotIndex)
+    for (int32 SlotIndex = 0; SlotIndex < 6; ++SlotIndex)
     {
-        UImage* SlotImage = nullptr;
-        if (WidgetTree)
+        UImage* SlotImage = Slots[SlotIndex];
+        if (!SlotImage)
         {
-            SlotImage = WidgetTree->ConstructWidget<UImage>(UImage::StaticClass());
+            continue;
+        }
+
+        if (SlotIndex < Items.Num() && Items[SlotIndex] && Items[SlotIndex]->Icon)
+        {
+            // Set the item icon
+            SlotImage->SetBrushFromTexture(Items[SlotIndex]->Icon);
+            SlotImage->SetVisibility(ESlateVisibility::Visible);
+            SlotImage->SetColorAndOpacity(FLinearColor::White);
+            UE_LOG(LogTemp, Log, TEXT("RefreshInventory: Slot %d set to %s"), SlotIndex, *Items[SlotIndex]->GetName());
         }
         else
         {
-            SlotImage = NewObject<UImage>(this);
-            if (!SlotImage) continue;
+            // Clear the slot (make transparent or hide)
+            SlotImage->SetBrushFromTexture(nullptr);
+            SlotImage->SetColorAndOpacity(FLinearColor(1.f, 1.f, 1.f, 0.2f)); // Semi-transparent for empty slot
         }
-
-        if (SlotIndex < Items.Num() && Items[SlotIndex])
-        {
-            if (Items[SlotIndex]->Icon)
-            {
-                SlotImage->SetBrushFromTexture(Items[SlotIndex]->Icon);
-            }
-        }
-
-        ItemsBox->AddChildToHorizontalBox(SlotImage);
     }
 }
 

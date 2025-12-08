@@ -168,9 +168,24 @@ public:
     UPROPERTY(Transient)
     UUserWidget* PingWheelInstance;
 
-    // Item slots (designer can place as many Image widgets as desired and name them Item_1 .. Item_6)
+    // Item slots - 6 images for inventory display
     UPROPERTY(meta = (BindWidgetOptional))
-    UHorizontalBox* ItemsBox;
+    UImage* Item_1;
+
+    UPROPERTY(meta = (BindWidgetOptional))
+    UImage* Item_2;
+
+    UPROPERTY(meta = (BindWidgetOptional))
+    UImage* Item_3;
+
+    UPROPERTY(meta = (BindWidgetOptional))
+    UImage* Item_4;
+
+    UPROPERTY(meta = (BindWidgetOptional))
+    UImage* Item_5;
+
+    UPROPERTY(meta = (BindWidgetOptional))
+    UImage* Item_6;
 
     // Ability / spell buttons
     UPROPERTY(meta = (BindWidgetOptional))
