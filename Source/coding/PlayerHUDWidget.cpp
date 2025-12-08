@@ -38,12 +38,47 @@
 
 void UPlayerHUDWidget::UpdateFromStats(UPlayerStatsComponent* Stats)
 {
+    if (!Stats) return;
+
+    // Gold
+    if (GoldText)
+    {
+        GoldText->SetText(FText::AsNumber(Stats->Gold));
+    }
+
     // Detailed stats
     if (Armor)
     {
-        Armor->SetText(FText::AsNumber(Stats->GetArmor()));
+        Armor->SetText(FText::AsNumber(FMath::RoundToInt(Stats->GetArmor())));
     }
-                   
+
+    if (AD)
+    {
+        AD->SetText(FText::AsNumber(FMath::RoundToInt(Stats->AttackDamage)));
+    }
+
+    if (AP)
+    {
+        AP->SetText(FText::AsNumber(FMath::RoundToInt(Stats->AbilityPower)));
+    }
+
+    if (AS)
+    {
+        // Attack Speed is usually shown as a float (e.g., 0.70)
+        AS->SetText(FText::FromString(FString::Printf(TEXT("%.2f"), Stats->AttackSpeed)));
+    }
+
+    if (Crit)
+    {
+        // Crit chance as percentage
+        Crit->SetText(FText::FromString(FString::Printf(TEXT("%.0f%%"), Stats->CritChance * 100.f)));
+    }
+
+    if (MagicResist)
+    {
+        MagicResist->SetText(FText::AsNumber(FMath::RoundToInt(Stats->MagicResist)));
+    }
+
 
     if (XPBar)
     {

@@ -14,10 +14,10 @@ void UShopItemWidget::NativeConstruct()
 {
     Super::NativeConstruct();
 
-    // Bind le bouton d'achat
+    // Bind le bouton d'achat (use AddUniqueDynamic to avoid double-binding)
     if (BuyButton)
     {
-        BuyButton->OnClicked.AddDynamic(this, &UShopItemWidget::OnBuyButtonClicked);
+        BuyButton->OnClicked.AddUniqueDynamic(this, &UShopItemWidget::OnBuyButtonClicked);
     }
 
     // Refresh l'affichage si déjà initialisé
@@ -100,19 +100,23 @@ bool UShopItemWidget::HasBoundNameText() const
 
 void UShopItemWidget::OnBuyButtonClicked()
 {
-    if (ItemData)
-    {
-        UE_LOG(LogTemp, Log, TEXT("SHOP: Buying item '%s' (cost=%d)"), *ItemData->DisplayName.ToString(), ItemData->Cost);
-    }
+    UE_LOG(LogTemp, Warning, TEXT("SHOP: BuyButton clicked! ItemData=%s ShopActor=%s"), 
+        ItemData ? *ItemData->GetName() : TEXT("NULL"),
+        ShopActor ? *ShopActor->GetName() : TEXT("NULL"));
+
     if (!ItemData || !ShopActor)
     {
+        UE_LOG(LogTemp, Warning, TEXT("SHOP: Purchase aborted - ItemData or ShopActor is NULL"));
         return;
     }
+
+    UE_LOG(LogTemp, Warning, TEXT("SHOP: Buying item '%s' (cost=%d)"), *ItemData->DisplayName.ToString(), ItemData->Cost);
 
     // Récupère le PlayerController
     APlayerController* PC = GetOwningPlayer();
     if (!PC)
     {
+        UE_LOG(LogTemp, Warning, TEXT("SHOP: No owning player controller!"));
         return;
     }
 
@@ -120,7 +124,12 @@ void UShopItemWidget::OnBuyButtonClicked()
     AMOBAPlayerController* MPC = Cast<AMOBAPlayerController>(PC);
     if (MPC)
     {
+        UE_LOG(LogTemp, Warning, TEXT("SHOP: Calling Server_RequestPurchase on controller %s"), *MPC->GetName());
         // Appelle directement le Server RPC via le controller
         MPC->Server_RequestPurchase(ShopActor, ItemData);
+    }
+    else
+    {
+        UE_LOG(LogTemp, Warning, TEXT("SHOP: PlayerController is not a MOBAPlayerController!"));
     }
 }

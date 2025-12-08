@@ -28,10 +28,18 @@ void UShopComponent::Server_RequestPurchase_Implementation(APlayerController* Bu
 
 void UShopComponent::HandlePurchase(APlayerController* Buyer, UItemData* Item)
 {
+    UE_LOG(LogCoding, Warning, TEXT("SHOP HandlePurchase: Buyer=%s Item=%s"), 
+        Buyer ? *Buyer->GetName() : TEXT("NULL"),
+        Item ? *Item->GetName() : TEXT("NULL"));
+
     if (!Buyer || !Item) return;
 
     // Only process purchases on the server
-    if (!GetOwner() || !GetOwner()->HasAuthority()) return;
+    if (!GetOwner() || !GetOwner()->HasAuthority())
+    {
+        UE_LOG(LogCoding, Warning, TEXT("SHOP HandlePurchase: Not on server, aborting"));
+        return;
+    }
 
     // Ensure the requested item belongs to this shop
     if (!AvailableItems.Contains(Item))
