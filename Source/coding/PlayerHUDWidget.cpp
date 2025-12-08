@@ -772,7 +772,8 @@ int32 UPlayerHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& All
         FVector2D AbsPos = MapGeometry.GetAbsolutePosition();
         FVector2D AbsSize = MapGeometry.GetAbsoluteSize();
         FVector2D LocalSize = MapGeometry.GetLocalSize();
-        FVector2D Scale = MapGeometry.GetAccumulatedLayoutTransform().GetScale();
+        // For now, just print a default scale (we can enhance this to detect DPI per-monitor later)
+        FVector2D Scale(1.0f, 1.0f);
         UE_LOG(LogCoding, Display, TEXT("PlayerHUDWidget: MapGeometry AbsPos=(%.1f,%.1f) AbsSize=(%.1f,%.1f) LocalSize=(%.1f,%.1f) Scale=(%.3f,%.3f)"), AbsPos.X, AbsPos.Y, AbsSize.X, AbsSize.Y, LocalSize.X, LocalSize.Y, Scale.X, Scale.Y);
     }
 
@@ -920,7 +921,7 @@ int32 UPlayerHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& All
             FSlateDrawElement::MakeBox(
                 OutDrawElements,
                 RetLayer + 1,
-                MapGeometry.ToOffsetPaintGeometry(TopLeft, BoxSize),
+                MapGeometry.ToPaintGeometry(TopLeft, BoxSize),
                 WhiteBrush,
                 ESlateDrawEffect::None,
                 Icon.Color
