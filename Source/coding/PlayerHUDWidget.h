@@ -482,8 +482,8 @@ public:
         UFUNCTION(BlueprintCallable, Category = "Minimap|Helpers")
         FVector2D GetCachedMinimapSizeAbs() const { return CachedMinimapSizeAbs; }
         // Cached screen-space minimap rect computed during NativePaint
-        FVector2D CachedMinimapTopLeftAbs = FVector2D::ZeroVector;
-        FVector2D CachedMinimapSizeAbs = FVector2D::ZeroVector;
+        mutable FVector2D CachedMinimapTopLeftAbs = FVector2D::ZeroVector;
+        mutable FVector2D CachedMinimapSizeAbs = FVector2D::ZeroVector;
     UFUNCTION(BlueprintCallable, Category = "Minimap|Helpers")
     FVector2D GetMinimapSize() const { return MinimapSize; }
     UFUNCTION(BlueprintCallable, Category = "Minimap|Helpers")
