@@ -348,6 +348,17 @@ FVector2D UPlayerHUDWidget::GetMinimapTopLeftFromViewport() const
     return TopLeft;
 }
 
+FVector2D UPlayerHUDWidget::GetMinimapTopLeftAbsolute() const
+{
+    const FGeometry& Geo = GetCachedGeometry();
+    if (!Geo.GetLocalSize().IsNearlyZero())
+    {
+        FVector2D LocalTopLeft = GetMinimapTopLeftLocal(Geo);
+        return Geo.LocalToAbsolute(LocalTopLeft);
+    }
+    return GetMinimapTopLeftFromViewport();
+}
+
 bool UPlayerHUDWidget::HandleMinimapClick(const FVector2D& ScreenPosition, bool bIsRightClick, bool bCtrlHeld, bool bAltHeld)
 {
     const FGeometry& Geo = GetCachedGeometry();

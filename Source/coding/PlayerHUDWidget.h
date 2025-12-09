@@ -471,6 +471,9 @@ public:
     bool IsScreenPositionOverMinimap(const FVector2D& ScreenPosition) const;
     // Fallback: compute minimap TopLeft using viewport size (used when geometry cached is unreliable)
     FVector2D GetMinimapTopLeftFromViewport() const;
+    // Returns the absolute screen-space top-left of the minimap
+    UFUNCTION(BlueprintCallable, Category = "Minimap|Helpers")
+    FVector2D GetMinimapTopLeftAbsolute() const;
 
     // Handle a click on the minimap from outside (e.g., from PlayerController)
     // Returns true if the click was handled
