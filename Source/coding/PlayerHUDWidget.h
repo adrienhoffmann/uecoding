@@ -476,6 +476,14 @@ public:
     FVector2D GetMinimapTopLeftAbsolute() const;
     UFUNCTION(BlueprintCallable, Category = "Minimap|Helpers")
     void GetMinimapScreenRect(FVector2D& OutTopLeft, FVector2D& OutSize) const;
+        // Return cached computed absolute rect (updated each NativePaint)
+        UFUNCTION(BlueprintCallable, Category = "Minimap|Helpers")
+        FVector2D GetCachedMinimapTopLeftAbs() const { return CachedMinimapTopLeftAbs; }
+        UFUNCTION(BlueprintCallable, Category = "Minimap|Helpers")
+        FVector2D GetCachedMinimapSizeAbs() const { return CachedMinimapSizeAbs; }
+        // Cached screen-space minimap rect computed during NativePaint
+        FVector2D CachedMinimapTopLeftAbs = FVector2D::ZeroVector;
+        FVector2D CachedMinimapSizeAbs = FVector2D::ZeroVector;
     UFUNCTION(BlueprintCallable, Category = "Minimap|Helpers")
     FVector2D GetMinimapSize() const { return MinimapSize; }
     UFUNCTION(BlueprintCallable, Category = "Minimap|Helpers")

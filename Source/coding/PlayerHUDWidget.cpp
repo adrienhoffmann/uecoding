@@ -369,9 +369,23 @@ void UPlayerHUDWidget::GetMinimapScreenRect(FVector2D& OutTopLeft, FVector2D& Ou
 bool UPlayerHUDWidget::HandleMinimapClick(const FVector2D& ScreenPosition, bool bIsRightClick, bool bCtrlHeld, bool bAltHeld)
 {
     const FGeometry& Geo = GetCachedGeometry();
+    // We can still handle clicks with cached absolute rect even if Geo is invalid
     if (Geo.GetLocalSize().IsNearlyZero())
     {
-        return false;
+        FVector2D CachedTL = CachedMinimapTopLeftAbs;
+        FVector2D CachedSize = CachedMinimapSizeAbs;
+        if (CachedSize.IsNearlyZero())
+        {
+            return false;
+        }
+        FVector2D MRMax = CachedTL + CachedSize;
+        bool bInside = (ScreenPosition.X >= CachedTL.X && ScreenPosition.Y >= CachedTL.Y && ScreenPosition.X <= MRMax.X && ScreenPosition.Y <= MRMax.Y);
+        if (!bInside) return false;
+        // Convert screen position to world using viewport approach
+        FVector WorldHit;
+        ScreenPositionToWorld(Geo, ScreenPosition, WorldHit, nullptr);
+        // Continue with processing below
+        UE_LOG(LogCoding, Display, TEXT("HandleMinimapClick(fallback): Screen=(%.1f,%.1f) World=%s Inside=%d"), ScreenPosition.X, ScreenPosition.Y, *WorldHit.ToString(), bInside ? 1 : 0);
     }
     
     // Convert screen position to world location
@@ -1099,7 +1113,11 @@ int32 UPlayerHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& All
         RetLayer += 1;
     }
 
-    // Debug: draw clickable area overlay if requested
+    // Update cached absolute rect (so hit tests use exactly the same rect we draw)
+    CachedMinimapTopLeftAbs = AllottedGeometry.LocalToAbsolute(MinimapTopLeft);
+    CachedMinimapSizeAbs = AllottedGeometry.LocalToAbsolute(MinimapTopLeft + Size) - CachedMinimapTopLeftAbs;
+
+    // Debug: draw clickable area overlay if requested (use cached absolute rect to ensure it matches)
     if (bShowClickableAreaDebug)
     {
         // Use a semi-transparent color and an outline to make the clickable area visible
@@ -1112,6 +1130,7 @@ int32 UPlayerHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& All
         FillBrush.DrawAs = ESlateBrushDrawType::Box;
         FillBrush.ImageSize = Size;
 
+        // Draw filled rectangle using paint geometry (same as before)
         FSlateDrawElement::MakeBox(
             OutDrawElements,
             RetLayer + 100,
@@ -1122,17 +1141,21 @@ int32 UPlayerHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& All
         );
 
         // Border: thin lines around the rectangle
+        FVector2D AbsTopLeft = CachedMinimapTopLeftAbs;
+        FVector2D AbsBR = AbsTopLeft + CachedMinimapSizeAbs;
         TArray<FVector2f> BorderPoints;
-        BorderPoints.Add(FVector2f(MinimapTopLeft.X, MinimapTopLeft.Y));
-        BorderPoints.Add(FVector2f(MinimapTopLeft.X + Size.X, MinimapTopLeft.Y));
-        BorderPoints.Add(FVector2f(MinimapTopLeft.X + Size.X, MinimapTopLeft.Y + Size.Y));
-        BorderPoints.Add(FVector2f(MinimapTopLeft.X, MinimapTopLeft.Y + Size.Y));
-        BorderPoints.Add(FVector2f(MinimapTopLeft.X, MinimapTopLeft.Y));
+        BorderPoints.Add(FVector2f(AbsTopLeft.X, AbsTopLeft.Y));
+        BorderPoints.Add(FVector2f(AbsBR.X, AbsTopLeft.Y));
+        BorderPoints.Add(FVector2f(AbsBR.X, AbsBR.Y));
+        BorderPoints.Add(FVector2f(AbsTopLeft.X, AbsBR.Y));
+        BorderPoints.Add(FVector2f(AbsTopLeft.X, AbsTopLeft.Y));
 
+        // The MakeLines call expects coordinates in the same paint geometry; use the full widget geometry paint to draw
+        FPaintGeometry FullGeom = AllottedGeometry.ToPaintGeometry(FVector2D::ZeroVector, AllottedGeometry.GetLocalSize());
         FSlateDrawElement::MakeLines(
             OutDrawElements,
             RetLayer + 101,
-            AllottedGeometry.ToPaintGeometry(FVector2D::ZeroVector, AllottedGeometry.GetLocalSize()),
+            FullGeom,
             BorderPoints,
             ESlateDrawEffect::None,
             BorderColor,
