@@ -1159,7 +1159,6 @@ void AMOBAPlayerController::OnRightClickTriggered()
 		if (GetMousePosition(MouseX, MouseY))
 		{
 			FVector2D MousePos(MouseX, MouseY);
-			FVector2D MousePos(MouseX, MouseY);
 			if (PlayerHUDWidget->IsScreenPositionOverMinimap(MousePos))
 			{
 				// Handle minimap right-click directly
