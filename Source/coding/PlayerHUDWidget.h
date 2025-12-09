@@ -492,7 +492,7 @@ public:
         // debug: last click visuals
         mutable FVector2D LastClickScreenPos = FVector2D::ZeroVector;
         mutable FVector2D LastReprojectedScreenPos = FVector2D::ZeroVector;
-        mutable FVector LastClickWorld = FVector::ZeroVector;
+        // Use existing LastClickWorld declared above; do not duplicate
         mutable double LastClickTime = 0.0;
     UFUNCTION(BlueprintCallable, Category = "Minimap|Helpers")
     FVector2D GetMinimapSize() const { return MinimapSize; }
