@@ -190,7 +190,7 @@ public:
 
     // Debug: show clickable minimap overlay in NativePaint
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
-    bool bShowClickableAreaDebug = false;
+    bool bShowClickableAreaDebug = true;
 
     // Ping wheel UI class (optional) - set this to a UMG widget blueprint that shows ping options
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap")
