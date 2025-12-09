@@ -474,6 +474,10 @@ public:
     // Returns the absolute screen-space top-left of the minimap
     UFUNCTION(BlueprintCallable, Category = "Minimap|Helpers")
     FVector2D GetMinimapTopLeftAbsolute() const;
+    UFUNCTION(BlueprintCallable, Category = "Minimap|Helpers")
+    FVector2D GetMinimapSize() const { return MinimapSize; }
+    UFUNCTION(BlueprintCallable, Category = "Minimap|Helpers")
+    int32 GetMinimapAnchorCorner() const { return MinimapAnchorCorner; }
 
     // Handle a click on the minimap from outside (e.g., from PlayerController)
     // Returns true if the click was handled

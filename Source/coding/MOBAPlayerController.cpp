@@ -325,7 +325,7 @@ void AMOBAPlayerController::OnLeftClickPressed()
 				bool bAlt = IsInputKeyDown(EKeys::LeftAlt) || IsInputKeyDown(EKeys::RightAlt);
 				UE_LOG(LogCoding, Display, TEXT("MOBA: Left click on minimap detected at screen=(%.1f,%.1f) -> routing to HUD"), MousePos.X, MousePos.Y);
 				FVector2D TopLeft = PlayerHUDWidget->GetMinimapTopLeftAbsolute();
-				UE_LOG(LogCoding, Verbose, TEXT("MOBA: HUD TopLeft abs=(%.1f,%.1f) Size=(%.1f,%.1f) Anchor=%d"), TopLeft.X, TopLeft.Y, PlayerHUDWidget->MinimapSize.X, PlayerHUDWidget->MinimapSize.Y, PlayerHUDWidget->MinimapAnchorCorner);
+				UE_LOG(LogCoding, Verbose, TEXT("MOBA: HUD TopLeft abs=(%.1f,%.1f) Size=(%.1f,%.1f) Anchor=%d"), TopLeft.X, TopLeft.Y, PlayerHUDWidget->GetMinimapSize().X, PlayerHUDWidget->GetMinimapSize().Y, PlayerHUDWidget->GetMinimapAnchorCorner());
 				PlayerHUDWidget->HandleMinimapClick(MousePos, false, bCtrl, bAlt);
 				return;
 			}
@@ -1168,7 +1168,7 @@ void AMOBAPlayerController::OnRightClickTriggered()
 				bool bAlt = IsInputKeyDown(EKeys::LeftAlt) || IsInputKeyDown(EKeys::RightAlt);
 				UE_LOG(LogCoding, Display, TEXT("MOBA: Right click on minimap detected at screen=(%.1f,%.1f) -> routing to HUD"), MousePos.X, MousePos.Y);
 				FVector2D TopLeft = PlayerHUDWidget->GetMinimapTopLeftAbsolute();
-				UE_LOG(LogCoding, Verbose, TEXT("MOBA: HUD TopLeft abs=(%.1f,%.1f) Size=(%.1f,%.1f) Anchor=%d"), TopLeft.X, TopLeft.Y, PlayerHUDWidget->MinimapSize.X, PlayerHUDWidget->MinimapSize.Y, PlayerHUDWidget->MinimapAnchorCorner);
+				UE_LOG(LogCoding, Verbose, TEXT("MOBA: HUD TopLeft abs=(%.1f,%.1f) Size=(%.1f,%.1f) Anchor=%d"), TopLeft.X, TopLeft.Y, PlayerHUDWidget->GetMinimapSize().X, PlayerHUDWidget->GetMinimapSize().Y, PlayerHUDWidget->GetMinimapAnchorCorner());
 				PlayerHUDWidget->HandleMinimapClick(MousePos, true, bCtrl, bAlt);
 				return;
 			}
