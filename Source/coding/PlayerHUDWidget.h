@@ -475,6 +475,8 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Minimap|Helpers")
     FVector2D GetMinimapTopLeftAbsolute() const;
     UFUNCTION(BlueprintCallable, Category = "Minimap|Helpers")
+    void GetMinimapScreenRect(FVector2D& OutTopLeft, FVector2D& OutSize) const;
+    UFUNCTION(BlueprintCallable, Category = "Minimap|Helpers")
     FVector2D GetMinimapSize() const { return MinimapSize; }
     UFUNCTION(BlueprintCallable, Category = "Minimap|Helpers")
     int32 GetMinimapAnchorCorner() const { return MinimapAnchorCorner; }

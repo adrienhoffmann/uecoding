@@ -297,24 +297,12 @@ bool UPlayerHUDWidget::ScreenPositionToWorld(const FGeometry& Geometry, const FV
 
 bool UPlayerHUDWidget::IsScreenPositionOverMinimap(const FVector2D& ScreenPosition) const
 {
-    // Get the cached geometry from the widget; fallback to viewport-based computation if invalid
-    const FGeometry& Geo = GetCachedGeometry();
-    if (Geo.GetLocalSize().IsNearlyZero())
-    {
-        // Fallback to viewport computation
-        FVector2D TopLeft = GetMinimapTopLeftFromViewport();
-        FVector2D MinimapLocalPos = ScreenPosition - TopLeft;
-        UE_LOG(LogCoding, Verbose, TEXT("IsScreenPositionOverMinimap: Using viewport fallback TopLeft=(%.1f,%.1f) Screen=(%.1f,%.1f) MinimapLocal=(%.1f,%.1f) Size=(%.1f,%.1f)"), TopLeft.X, TopLeft.Y, ScreenPosition.X, ScreenPosition.Y, MinimapLocalPos.X, MinimapLocalPos.Y, MinimapSize.X, MinimapSize.Y);
-        return (MinimapLocalPos.X >= 0 && MinimapLocalPos.Y >= 0 && MinimapLocalPos.X <= MinimapSize.X && MinimapLocalPos.Y <= MinimapSize.Y);
-    }
-    
-    FVector2D LocalPos = Geo.AbsoluteToLocal(ScreenPosition);
-    FVector2D TopLeft = GetMinimapTopLeftLocal(Geo);
-    FVector2D MinimapLocalPos = LocalPos - TopLeft;
-    UE_LOG(LogCoding, Verbose, TEXT("IsScreenPositionOverMinimap: GeoSize=(%.1f,%.1f) TopLeft=(%.1f,%.1f) Screen=(%.1f,%.1f) MinimapLocal=(%.1f,%.1f) Size=(%.1f,%.1f)"), Geo.GetLocalSize().X, Geo.GetLocalSize().Y, TopLeft.X, TopLeft.Y, ScreenPosition.X, ScreenPosition.Y, MinimapLocalPos.X, MinimapLocalPos.Y, MinimapSize.X, MinimapSize.Y);
-    
-    return (MinimapLocalPos.X >= 0 && MinimapLocalPos.Y >= 0 && 
-            MinimapLocalPos.X <= MinimapSize.X && MinimapLocalPos.Y <= MinimapSize.Y);
+    FVector2D TopLeftAbs, SizeAbs;
+    GetMinimapScreenRect(TopLeftAbs, SizeAbs);
+    FVector2D MRMax = TopLeftAbs + SizeAbs;
+    bool bInside = (ScreenPosition.X >= TopLeftAbs.X && ScreenPosition.Y >= TopLeftAbs.Y && ScreenPosition.X <= MRMax.X && ScreenPosition.Y <= MRMax.Y);
+    UE_LOG(LogCoding, Verbose, TEXT("IsScreenPositionOverMinimap: AbsTopLeft=(%.1f,%.1f) AbsSize=(%.1f,%.1f) Screen=(%.1f,%.1f) IsInside=%d"), TopLeftAbs.X, TopLeftAbs.Y, SizeAbs.X, SizeAbs.Y, ScreenPosition.X, ScreenPosition.Y, bInside ? 1 : 0);
+    return bInside;
 }
 
 FVector2D UPlayerHUDWidget::GetMinimapTopLeftFromViewport() const
@@ -357,6 +345,25 @@ FVector2D UPlayerHUDWidget::GetMinimapTopLeftAbsolute() const
         return Geo.LocalToAbsolute(LocalTopLeft);
     }
     return GetMinimapTopLeftFromViewport();
+}
+
+void UPlayerHUDWidget::GetMinimapScreenRect(FVector2D& OutTopLeft, FVector2D& OutSize) const
+{
+    const FGeometry& Geo = GetCachedGeometry();
+    if (!Geo.GetLocalSize().IsNearlyZero())
+    {
+        FVector2D LocalTopLeft = GetMinimapTopLeftLocal(Geo);
+        FVector2D LocalBottomRight = LocalTopLeft + MinimapSize;
+        FVector2D AbsTopLeft = Geo.LocalToAbsolute(LocalTopLeft);
+        FVector2D AbsBR = Geo.LocalToAbsolute(LocalBottomRight);
+        OutTopLeft = AbsTopLeft;
+        OutSize = AbsBR - AbsTopLeft;
+        return;
+    }
+
+    FVector2D TopLeft = GetMinimapTopLeftFromViewport();
+    OutTopLeft = TopLeft;
+    OutSize = MinimapSize;
 }
 
 bool UPlayerHUDWidget::HandleMinimapClick(const FVector2D& ScreenPosition, bool bIsRightClick, bool bCtrlHeld, bool bAltHeld)
