@@ -191,6 +191,11 @@ public:
     // Debug: show clickable minimap overlay in NativePaint
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
     bool bShowClickableAreaDebug = true;
+    // Debug: show click reprojection points and connect them
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
+    bool bShowClickableClickDebug = true;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
+    float ClickDebugDisplaySeconds = 3.0f;
 
     // Ping wheel UI class (optional) - set this to a UMG widget blueprint that shows ping options
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap")
@@ -484,6 +489,11 @@ public:
         // Cached screen-space minimap rect computed during NativePaint
         mutable FVector2D CachedMinimapTopLeftAbs = FVector2D::ZeroVector;
         mutable FVector2D CachedMinimapSizeAbs = FVector2D::ZeroVector;
+        // debug: last click visuals
+        mutable FVector2D LastClickScreenPos = FVector2D::ZeroVector;
+        mutable FVector2D LastReprojectedScreenPos = FVector2D::ZeroVector;
+        mutable FVector LastClickWorld = FVector::ZeroVector;
+        mutable double LastClickTime = 0.0;
     UFUNCTION(BlueprintCallable, Category = "Minimap|Helpers")
     FVector2D GetMinimapSize() const { return MinimapSize; }
     UFUNCTION(BlueprintCallable, Category = "Minimap|Helpers")

@@ -266,11 +266,23 @@ FVector2D UPlayerHUDWidget::GetMinimapTopLeftLocal(const FGeometry& Geometry) co
 
 bool UPlayerHUDWidget::ScreenPositionToWorld(const FGeometry& Geometry, const FVector2D& ScreenPosition, FVector& OutWorldLocation, FVector2D* OutMinimapLocal /*= nullptr*/) const
 {
-    FVector2D LocalPos = Geometry.AbsoluteToLocal(ScreenPosition);
-    FVector2D TopLeft = GetMinimapTopLeftLocal(Geometry);
-    FVector2D MinimapLocalPos = LocalPos - TopLeft;
+    FVector2D LocalPos = FVector2D::ZeroVector;
+    FVector2D TopLeft = FVector2D::ZeroVector;
+    FVector2D MinimapLocalPos = FVector2D::ZeroVector;
+    const bool bHaveGeometry = !Geometry.GetLocalSize().IsNearlyZero();
+    if (bHaveGeometry)
+    {
+        LocalPos = Geometry.AbsoluteToLocal(ScreenPosition);
+        TopLeft = GetMinimapTopLeftLocal(Geometry);
+        MinimapLocalPos = LocalPos - TopLeft;
+    }
+    else
+    {
+        // Fallback: compute using viewport only
+        TopLeft = GetMinimapTopLeftFromViewport();
+        MinimapLocalPos = ScreenPosition - TopLeft;
+    }
     if (OutMinimapLocal) *OutMinimapLocal = MinimapLocalPos;
-
     if (MinimapLocalPos.X < 0 || MinimapLocalPos.Y < 0 || MinimapLocalPos.X > MinimapSize.X || MinimapLocalPos.Y > MinimapSize.Y)
     {
         return false;
@@ -455,6 +467,18 @@ bool UPlayerHUDWidget::HandleMinimapClick(const FVector2D& ScreenPosition, bool 
     else if (MPC)
     {
         MPC->Server_RequestPing(WorldHit, EMapPingType::Ping_OnMyWay);
+    }
+    // Debug: save last click and reprojected screen position
+    if (bShowClickableClickDebug)
+    {
+        LastClickScreenPos = ScreenPosition;
+        LastClickWorld = WorldHit;
+        FVector2D Normalized = WorldToMinimapNormalized(WorldHit);
+        // Get absolute top-left
+        FVector2D TopLeftAbs = CachedMinimapTopLeftAbs;
+        FVector2D SizeAbs = CachedMinimapSizeAbs;
+        LastReprojectedScreenPos = TopLeftAbs + FVector2D(Normalized.X * SizeAbs.X, Normalized.Y * SizeAbs.Y);
+        LastClickTime = FPlatformTime::Seconds();
     }
     return true;
 }
@@ -1141,14 +1165,15 @@ int32 UPlayerHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& All
         );
 
         // Border: thin lines around the rectangle
-        FVector2D AbsTopLeft = CachedMinimapTopLeftAbs;
-        FVector2D AbsBR = AbsTopLeft + CachedMinimapSizeAbs;
+        // Build border points in local coordinates for the FullGeom paint
+        FVector2D LocalTL = MinimapTopLeft;
+        FVector2D LocalBR = LocalTL + Size;
         TArray<FVector2f> BorderPoints;
-        BorderPoints.Add(FVector2f(AbsTopLeft.X, AbsTopLeft.Y));
-        BorderPoints.Add(FVector2f(AbsBR.X, AbsTopLeft.Y));
-        BorderPoints.Add(FVector2f(AbsBR.X, AbsBR.Y));
-        BorderPoints.Add(FVector2f(AbsTopLeft.X, AbsBR.Y));
-        BorderPoints.Add(FVector2f(AbsTopLeft.X, AbsTopLeft.Y));
+        BorderPoints.Add(FVector2f(LocalTL.X, LocalTL.Y));
+        BorderPoints.Add(FVector2f(LocalBR.X, LocalTL.Y));
+        BorderPoints.Add(FVector2f(LocalBR.X, LocalBR.Y));
+        BorderPoints.Add(FVector2f(LocalTL.X, LocalBR.Y));
+        BorderPoints.Add(FVector2f(LocalTL.X, LocalTL.Y));
 
         // The MakeLines call expects coordinates in the same paint geometry; use the full widget geometry paint to draw
         FPaintGeometry FullGeom = AllottedGeometry.ToPaintGeometry(FVector2D::ZeroVector, AllottedGeometry.GetLocalSize());
@@ -1163,6 +1188,35 @@ int32 UPlayerHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& All
             2.0f
         );
         RetLayer += 2;
+    }
+
+    // Debug: draw last click and reprojected point & connecting line
+    if (bShowClickableClickDebug && (FPlatformTime::Seconds() - LastClickTime) <= ClickDebugDisplaySeconds)
+    {
+        // Convert screen positions to local for drawing
+        FVector2D LocalClick = AllottedGeometry.AbsoluteToLocal(LastClickScreenPos);
+        FVector2D LocalReproj = AllottedGeometry.AbsoluteToLocal(LastReprojectedScreenPos);
+        const float MarkerHalf = 4.0f;
+        FLinearColor ClickColor(1.0f, 0.0f, 0.0f, 1.0f);
+        FLinearColor ReprojColor(0.0f, 1.0f, 0.0f, 1.0f);
+
+        // Draw small boxes
+        FSlateBrush MarkerBrush;
+        MarkerBrush.DrawAs = ESlateBrushDrawType::Box;
+        MarkerBrush.TintColor = FSlateColor(ClickColor);
+        FPaintGeometry ClickGeom = AllottedGeometry.ToPaintGeometry(FVector2D(MarkerHalf * 2.0f, MarkerHalf * 2.0f), FSlateLayoutTransform(LocalClick - FVector2D(MarkerHalf, MarkerHalf)));
+        FSlateDrawElement::MakeBox(OutDrawElements, RetLayer + 10, ClickGeom, &MarkerBrush, ESlateDrawEffect::None, ClickColor);
+
+        MarkerBrush.TintColor = FSlateColor(ReprojColor);
+        FPaintGeometry ReprojGeom = AllottedGeometry.ToPaintGeometry(FVector2D(MarkerHalf * 2.0f, MarkerHalf * 2.0f), FSlateLayoutTransform(LocalReproj - FVector2D(MarkerHalf, MarkerHalf)));
+        FSlateDrawElement::MakeBox(OutDrawElements, RetLayer + 11, ReprojGeom, &MarkerBrush, ESlateDrawEffect::None, ReprojColor);
+
+        // Draw line connecting click and reprojected point
+        TArray<FVector2f> LinePoints;
+        LinePoints.Add(FVector2f(LocalClick.X, LocalClick.Y));
+        LinePoints.Add(FVector2f(LocalReproj.X, LocalReproj.Y));
+        FSlateDrawElement::MakeLines(OutDrawElements, RetLayer + 12, AllottedGeometry.ToPaintGeometry(FVector2D::ZeroVector, AllottedGeometry.GetLocalSize()), LinePoints, ESlateDrawEffect::None, FLinearColor::Yellow, true, 1.5f);
+        RetLayer += 3;
     }
 
     // Debug: force-draw helpers (temporary)
