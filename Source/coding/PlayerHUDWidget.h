@@ -188,6 +188,10 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap")
     bool bSwapMinimapXY = true;
 
+    // Debug: show clickable minimap overlay in NativePaint
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
+    bool bShowClickableAreaDebug = false;
+
     // Ping wheel UI class (optional) - set this to a UMG widget blueprint that shows ping options
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap")
     TSubclassOf<UUserWidget> PingWheelClass;
@@ -455,6 +459,23 @@ public:
     // WorldLocation is the corresponding world position for the ping (used when clicking on minimap)
     UFUNCTION(BlueprintCallable, Category = "PingWheel")
     void ShowPingWheelAtScreenLocation(const FVector2D& ScreenLocation, const FVector& WorldLocation = FVector::ZeroVector);
+
+    // Helper to compute minimap top-left (local widget space) and to convert a screen position to the corresponding world location
+    UFUNCTION(BlueprintCallable, Category = "Minimap|Helpers")
+    FVector2D GetMinimapTopLeftLocal(const FGeometry& Geometry) const;
+
+    bool ScreenPositionToWorld(const FGeometry& Geometry, const FVector2D& ScreenPosition, FVector& OutWorldLocation, FVector2D* OutMinimapLocal = nullptr) const;
+
+    // Check if a screen position is over the minimap area
+    UFUNCTION(BlueprintCallable, Category = "Minimap|Helpers")
+    bool IsScreenPositionOverMinimap(const FVector2D& ScreenPosition) const;
+    // Fallback: compute minimap TopLeft using viewport size (used when geometry cached is unreliable)
+    FVector2D GetMinimapTopLeftFromViewport() const;
+
+    // Handle a click on the minimap from outside (e.g., from PlayerController)
+    // Returns true if the click was handled
+    UFUNCTION(BlueprintCallable, Category = "Minimap|Input")
+    bool HandleMinimapClick(const FVector2D& ScreenPosition, bool bIsRightClick, bool bCtrlHeld, bool bAltHeld);
 
     // Request to purchase an item from a shop actor (calls server via playercontroller). Implemented in PlayerHUDWidget to expose to UMG
     UFUNCTION(BlueprintCallable, Category = "Shop")

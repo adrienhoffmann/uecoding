@@ -311,6 +311,29 @@ void AMOBAPlayerController::OnZoom(const FInputActionValue& Value)
 
 void AMOBAPlayerController::OnLeftClickPressed()
 {
+	// Check if user is clicking on the minimap first (screen-space UI check)
+	if (PlayerHUDWidget)
+	{
+		float MouseX, MouseY;
+		if (GetMousePosition(MouseX, MouseY))
+		{
+			FVector2D MousePos(MouseX, MouseY);
+			if (PlayerHUDWidget->IsScreenPositionOverMinimap(MousePos))
+			{
+				// Handle minimap click directly
+				bool bCtrl = IsInputKeyDown(EKeys::LeftControl) || IsInputKeyDown(EKeys::RightControl);
+				bool bAlt = IsInputKeyDown(EKeys::LeftAlt) || IsInputKeyDown(EKeys::RightAlt);
+				UE_LOG(LogCoding, Display, TEXT("MOBA: Left click on minimap detected at screen=(%.1f,%.1f) -> routing to HUD"), MousePos.X, MousePos.Y);
+				PlayerHUDWidget->HandleMinimapClick(MousePos, false, bCtrl, bAlt);
+				return;
+			}
+			else
+			{
+				UE_LOG(LogCoding, Verbose, TEXT("MOBA: Left click NOT on minimap screen=(%.1f,%.1f), continuing"), MousePos.X, MousePos.Y);
+			}
+		}
+	}
+
 	// Check if user is clicking on UI; if so, skip world trace (we handle minimap clicks in the widget)
 	FHitResult Hit;
 	GetHitResultUnderCursorByChannel(UEngineTypes::ConvertToTraceType(ECC_Visibility), true, Hit);
@@ -1128,6 +1151,30 @@ void AMOBAPlayerController::ClearSelectedTarget()
 void AMOBAPlayerController::OnRightClickTriggered()
 {
 	UE_LOG(LogCoding, Verbose, TEXT("OnRightClickTriggered: called"));
+
+	// Check if user is clicking on the minimap first (screen-space UI check)
+	if (PlayerHUDWidget)
+	{
+		float MouseX, MouseY;
+		if (GetMousePosition(MouseX, MouseY))
+		{
+			FVector2D MousePos(MouseX, MouseY);
+			FVector2D MousePos(MouseX, MouseY);
+			if (PlayerHUDWidget->IsScreenPositionOverMinimap(MousePos))
+			{
+				// Handle minimap right-click directly
+				bool bCtrl = IsInputKeyDown(EKeys::LeftControl) || IsInputKeyDown(EKeys::RightControl);
+				bool bAlt = IsInputKeyDown(EKeys::LeftAlt) || IsInputKeyDown(EKeys::RightAlt);
+				UE_LOG(LogCoding, Display, TEXT("MOBA: Right click on minimap detected at screen=(%.1f,%.1f) -> routing to HUD"), MousePos.X, MousePos.Y);
+				PlayerHUDWidget->HandleMinimapClick(MousePos, true, bCtrl, bAlt);
+				return;
+			}
+			else
+			{
+				UE_LOG(LogCoding, Verbose, TEXT("MOBA: Right click NOT on minimap screen=(%.1f,%.1f), continuing"), MousePos.X, MousePos.Y);
+			}
+		}
+	}
 
 	// Stop current movement
 	StopMovement();
