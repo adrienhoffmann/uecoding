@@ -4,6 +4,7 @@
 #include "PlayerHUDWidget.h"
 #include "TimerManager.h"
 #include "Logging.h"
+#include "VisionSourceComponent.h"
 
 UMinimapComponent::UMinimapComponent()
 {
@@ -19,6 +20,16 @@ void UMinimapComponent::BeginPlay()
     Super::BeginPlay();
 
     if (!bShowOnMinimap) return;
+
+    // Auto-initialize TeamID from owner if it has a VisionSourceComponent
+    if (AActor* A = GetOwner())
+    {
+        if (UVisionSourceComponent* VSC = A->FindComponentByClass<UVisionSourceComponent>())
+        {
+            TeamID = VSC->TeamID;
+            UE_LOG(LogCoding, Log, TEXT("UMinimapComponent: Auto-initialized TeamID=%d for owner %s from VisionSourceComponent"), TeamID, *A->GetName());
+        }
+    }
 
     // Try to register now; if no HUD exists yet, set a short timer to retry a few times
     RetryAttemptsRemaining = 6; // try for ~3 seconds if interval 0.5s

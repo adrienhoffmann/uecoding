@@ -5,6 +5,7 @@
 #include "Blueprint/UserWidget.h"
 #include "MapPing.h"
 #include "FogOfWarManager.h"
+#include "MinimapComponent.h"
 #include "PlayerHUDWidget.generated.h"
 
 class UTextBlock;
@@ -111,6 +112,27 @@ protected:
     // Container for the minimap (used for click detection bounds)
     UPROPERTY(meta = (BindWidgetOptional))
     UPanelWidget* MinimapContainer;
+
+    // ===== Minimap Configuration (exposed for easy editor setup) =====
+    // Texture to use as the minimap background. If not set, uses the MapImage brush or loads from MinimapTexturePath.
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Setup")
+    UTexture2D* MinimapTexture = nullptr;
+
+    // Fallback path to load minimap texture if MinimapTexture is not set (e.g., /Game/customgamemode/moba/icons/MOBAminiMap)
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Setup")
+    FString MinimapTexturePath = TEXT("/Game/customgamemode/moba/icons/MOBAminiMap.MOBAminiMap");
+
+    // Size of the minimap widget in pixels
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Setup", meta = (ClampMin = "50.0", ClampMax = "500.0"))
+    FVector2D MinimapSize = FVector2D(200.f, 200.f);
+
+    // Anchor corner for the minimap: 0 = TopLeft, 1 = TopRight, 2 = BottomLeft, 3 = BottomRight
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Setup", meta = (ClampMin = "0", ClampMax = "3"))
+    int32 MinimapAnchorCorner = 2; // Default: BottomLeft
+
+    // Offset from the anchor corner in pixels (positive = inward from edges)
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Setup")
+    FVector2D MinimapOffset = FVector2D(10.f, 10.f);
 
     // World bounds represented on the minimap (X,Y half extents)
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap")
@@ -220,10 +242,10 @@ public:
 
     // Minimap logging controls (to avoid spamming the log every tick)
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
-    bool bEnableMinimapLogging = false;
+    bool bEnableMinimapLogging = true; // Enabled for FOW/minimap diagnostics
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
-    bool bMinimapVerboseLogging = false;
+    bool bMinimapVerboseLogging = true; // Very verbose per-icon logging
 
     // Minimum seconds between successive minimap icon debug prints (when enabled)
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
@@ -270,6 +292,7 @@ private:
         TWeakObjectPtr<AActor> OwnerActor;
         int32 TeamID;  // For fog of war visibility check
         bool bGhost = false;  // True if icon is a "ghost" (explored but not currently visible)
+        EMinimapIconType IconType = EMinimapIconType::Icon_Object;  // Type of icon (hero, minion, tower, object)
     };
     TArray<FMinimapIcon> CachedIcons;
 
@@ -287,9 +310,79 @@ private:
     UPROPERTY(EditAnywhere, Category = "Minimap|FOW")
     float ExploredGhostAlpha = 0.35f;
 
+    // ===== Minimap Icon Textures =====
+    // Team-specific turret icons. If set, these override the generic turret texture (generic removed).
+    UPROPERTY(EditAnywhere, Category = "Minimap|Icons")
+    UTexture2D* MinimapIcon_Tower_Team0 = nullptr;
+
+    UPROPERTY(EditAnywhere, Category = "Minimap|Icons")
+    UTexture2D* MinimapIcon_Tower_Team1 = nullptr;
+
+    // Team-specific nexus icons. If set, these override any generic nexus texture (generic removed).
+    UPROPERTY(EditAnywhere, Category = "Minimap|Icons")
+    UTexture2D* MinimapIcon_Nexus_Team0 = nullptr;
+
+    UPROPERTY(EditAnywhere, Category = "Minimap|Icons")
+    UTexture2D* MinimapIcon_Nexus_Team1 = nullptr;
+
+    // Texture for champion portraits (circular with team border)
+    UPROPERTY(EditAnywhere, Category = "Minimap|Icons")
+    UTexture2D* MinimapIcon_Champion = nullptr;
+
+    // Border thickness for champion icons (in pixels)
+    UPROPERTY(EditAnywhere, Category = "Minimap|Icons")
+    float ChampionBorderThickness = 2.0f;
+
     // How long (seconds) to keep showing a ghost icon after losing sight of an enemy (0 = forever until map changes)
     UPROPERTY(EditAnywhere, Category = "Minimap|FOW")
     float LastKnownPositionExpirySeconds = 8.f;
+
+    // ===== FOW Minimap Overlay =====
+    // If true, draw a grey overlay on the minimap for hidden/explored areas
+    UPROPERTY(EditAnywhere, Category = "Minimap|FOW")
+    bool bDrawFOWOverlay = true;
+
+    // Resolution of the FOW overlay grid (cells per axis on minimap). Higher = smoother but heavier.
+    // Note: increasing this will increase CPU cost exponentially (N*N cells) while painting.
+    UPROPERTY(EditAnywhere, Category = "Minimap|FOW", meta = (ClampMin = "16", ClampMax = "512"))
+    int32 FOWOverlayGridSize = 48;
+
+    // Number of samples per cell for edge smoothing (1 = no smoothing, 5 = center + 4 corners, 9 = 3x3 grid)
+    UPROPERTY(EditAnywhere, Category = "Minimap|FOW", meta = (ClampMin = "1", ClampMax = "9"))
+    int32 FOWOverlaySmoothSamples = 5;
+
+    // Color for completely hidden (never explored) areas
+    UPROPERTY(EditAnywhere, Category = "Minimap|FOW")
+    FLinearColor FOWHiddenColor = FLinearColor(0.12f, 0.12f, 0.12f, 0.6f); // Light gray, semi-opaque
+
+    // Color for explored but not currently visible areas
+    UPROPERTY(EditAnywhere, Category = "Minimap|FOW")
+    FLinearColor FOWExploredColor = FLinearColor(0.18f, 0.18f, 0.18f, 0.35f); // Slightly lighter gray for explored
+
+    // Use the fog manager's local team fog texture or render target as overlay for smooth FOW rendering
+    UPROPERTY(EditAnywhere, Category = "Minimap|FOW")
+    bool bUseFogTextureOverlay = true;
+
+    // If true, prefer the grid-based overlay (computed in code) rather than drawing a texture directly.
+    UPROPERTY(EditAnywhere, Category = "Minimap|FOW")
+    bool bPreferGridFOWOverlay = true;
+
+    // Overall opacity multiplier used when drawing the fog texture overlay (0.0 - fully transparent -> 1.0 fully opaque)
+    UPROPERTY(EditAnywhere, Category = "Minimap|FOW", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+    float FogOverlayTextureOpacity = 1.0f;
+
+    // Align the fog texture to the minimap world bounds and compute UV region accordingly
+    UPROPERTY(EditAnywhere, Category = "Minimap|FOW")
+    bool bAlignFogTextureToMinimap = true;
+
+    // If the fog texture appears vertically flipped on the minimap, set this true to flip UVs
+    UPROPERTY(EditAnywhere, Category = "Minimap|FOW")
+    bool bForceFogTextureFlipY = false;
+
+    // Rotation to apply to the fog overlay texture in degrees. Positive = CW, negative = CCW.
+    // Default: 90.0 (rotate 90 degrees clockwise)
+    UPROPERTY(EditAnywhere, Category = "Minimap|FOW")
+    float FogOverlayRotationDegrees = 0.0f;
 
     // Registered minimap components (avoid expensive world scan each tick)
     TArray<TWeakObjectPtr<class UMinimapComponent>> RegisteredMinimapComponents;
@@ -359,8 +452,9 @@ public:
     void ShowPingWheelAtWorldLocation(const FVector& WorldLocation);
     
     // Show the ping wheel directly at a screen location (e.g. minimap click), centered at that pixel position
+    // WorldLocation is the corresponding world position for the ping (used when clicking on minimap)
     UFUNCTION(BlueprintCallable, Category = "PingWheel")
-    void ShowPingWheelAtScreenLocation(const FVector2D& ScreenLocation);
+    void ShowPingWheelAtScreenLocation(const FVector2D& ScreenLocation, const FVector& WorldLocation = FVector::ZeroVector);
 
     // Request to purchase an item from a shop actor (calls server via playercontroller). Implemented in PlayerHUDWidget to expose to UMG
     UFUNCTION(BlueprintCallable, Category = "Shop")

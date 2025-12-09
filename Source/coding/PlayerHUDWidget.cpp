@@ -23,6 +23,7 @@
 #include "Components/TextBlock.h"
 #include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Blueprint/WidgetLayoutLibrary.h"
+#include "Components/CanvasPanelSlot.h"
 #include "FogOfWarManager.h"
 #include "VisionSourceComponent.h"
 #include "NavigationSystem.h"
@@ -146,7 +147,17 @@ void UPlayerHUDWidget::NativeConstruct()
     // Make the widget focusable to receive mouse events
     SetIsFocusable(true);
 
-    UE_LOG(LogCoding, Log, TEXT("PlayerHUDWidget::NativeConstruct - HUD constructed and ready. MapImage=%s WorldBoundsHalfSize=(%.1f,%.1f) WorldCenter=(%.1f,%.1f) AutoDetectWorldBounds=%d"), MapImage ? TEXT("Valid") : TEXT("Null"), WorldBoundsHalfSize.X, WorldBoundsHalfSize.Y, WorldCenter.X, WorldCenter.Y, bAutoDetectWorldBounds ? 1 : 0);
+    UE_LOG(LogCoding, Log, TEXT("PlayerHUDWidget::NativeConstruct - HUD constructed and ready. WorldBoundsHalfSize=(%.1f,%.1f) WorldCenter=(%.1f,%.1f) AutoDetectWorldBounds=%d"), WorldBoundsHalfSize.X, WorldBoundsHalfSize.Y, WorldCenter.X, WorldCenter.Y, bAutoDetectWorldBounds ? 1 : 0);
+
+    // Load the minimap texture if not already set
+    if (!MinimapTexture && !MinimapTexturePath.IsEmpty())
+    {
+        MinimapTexture = LoadObject<UTexture2D>(nullptr, *MinimapTexturePath);
+        if (MinimapTexture)
+        {
+            UE_LOG(LogCoding, Log, TEXT("PlayerHUDWidget: Loaded minimap texture from path: %s"), *MinimapTexturePath);
+        }
+    }
 
     // Get Fog of War manager reference
     FogManager = AFogOfWarManager::GetInstance(GetWorld());
@@ -295,13 +306,17 @@ void UPlayerHUDWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime
         const FVector ActorLoc = Owner->GetActorLocation();
         const int32 OwnerTeamID = MC->TeamID;
         const bool bIsEnemy = (OwnerTeamID != LocalPlayerTeamID);
+        
+        // Towers (and structures using Icon_Tower or Icon_Object) are always visible on minimap
+        // Only hide enemy minions and heroes in fog
+        const bool bShouldApplyFogHiding = (MC->IconType == EMinimapIconType::Icon_Minion || MC->IconType == EMinimapIconType::Icon_Hero);
 
         // Default: not ghost, visible
         bool bShouldShow = true;
         bool bAsGhost = false;
 
-        // Check FOW visibility for enemies
-        if (bIsEnemy && FogManager)
+        // Check FOW visibility for enemy minions and heroes only (towers/objects always visible)
+        if (bIsEnemy && FogManager && bShouldApplyFogHiding)
         {
             const bool bVisible = FogManager->IsLocationVisibleToTeam(ActorLoc, LocalPlayerTeamID);
             const bool bExplored = FogManager->IsLocationExploredByTeam(ActorLoc, LocalPlayerTeamID);
@@ -313,6 +328,10 @@ void UPlayerHUDWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime
                 bAsGhost = false;
                 LastKnownPositions.Add(Owner, ActorLoc);
                 LastSeenTimes.Add(Owner, GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0);
+                if (bEnableMinimapLogging && bMinimapVerboseLogging)
+                {
+                    UE_LOG(LogCoding, Log, TEXT("PlayerHUDWidget: Visible enemy %s Team=%d Position=(%.1f,%.1f,%.1f) -> updating LastKnown"), *Owner->GetName(), OwnerTeamID, ActorLoc.X, ActorLoc.Y, ActorLoc.Z);
+                }
             }
             else if (bShowExploredAsGhost && bExplored)
             {
@@ -330,20 +349,31 @@ void UPlayerHUDWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime
                     I.Size = MC->IconSize > 0 ? MC->IconSize : 6.0f;
                     I.TeamID = OwnerTeamID;
                     I.bGhost = true;
+                    I.IconType = MC->IconType;
                     CachedIcons.Add(I);
                     AddedActors.Add(Owner);
+                    // Log the ghost addition with timestamp info if verbose logging is enabled
+                    if (bEnableMinimapLogging && bMinimapVerboseLogging)
+                    {
+                        double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+                        double LastSeen = LastSeenTimes.Contains(Owner) ? LastSeenTimes[Owner] : 0.0;
+                        double Age = (LastSeen > 0.0) ? (Now - LastSeen) : -1.0;
+                        UE_LOG(LogCoding, Log, TEXT("PlayerHUDWidget: Ghost icon added for %s Team=%d LastKnown=(%.1f,%.1f,%.1f) Age=%.2f"), *Owner->GetName(), OwnerTeamID, LastPos->X, LastPos->Y, LastPos->Z, Age);
+                    }
                     continue; // Skip normal add below
                 }
                 else
                 {
                     // No last known position -> don't show at all
                     bShouldShow = false;
+                    UE_LOG(LogCoding, Verbose, TEXT("PlayerHUDWidget: enemy %s is explored but has no LastKnownPos"), *Owner->GetName());
                 }
             }
             else
             {
                 // Not visible, not explored (or ghost disabled) -> don't show
                 bShouldShow = false;
+                UE_LOG(LogCoding, Verbose, TEXT("PlayerHUDWidget: enemy %s not visible and not explored - skipping"), *Owner->GetName());
             }
         }
 
@@ -357,6 +387,7 @@ void UPlayerHUDWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime
             I.Size = MC->IconSize > 0 ? MC->IconSize : 6.0f;
             I.TeamID = OwnerTeamID;
             I.bGhost = bAsGhost;
+            I.IconType = MC->IconType;
             CachedIcons.Add(I);
             AddedActors.Add(Owner);
         }
@@ -418,7 +449,7 @@ void UPlayerHUDWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime
                 {
                     const FMinimapIcon& MI = CachedIcons[i];
                     FString Name = MI.OwnerActor.IsValid() ? MI.OwnerActor->GetName() : TEXT("(no-owner)");
-                    UE_LOG(LogCoding, Display, TEXT("MinimapIcon[%d] Owner=%s World=%s Norm=(%.3f,%.3f)"), i, *Name, *MI.WorldLocation.ToString(), MI.Normalized.X, MI.Normalized.Y);
+                    UE_LOG(LogCoding, Display, TEXT("MinimapIcon[%d] Owner=%s World=%s Norm=(%.3f,%.3f) Ghost=%d"), i, *Name, *MI.WorldLocation.ToString(), MI.Normalized.X, MI.Normalized.Y, MI.bGhost ? 1 : 0);
                 }
             }
             else
@@ -549,11 +580,29 @@ FReply UPlayerHUDWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, co
     const FKey EntryButton = InMouseEvent.GetEffectingButton();
     UE_LOG(LogCoding, Display, TEXT("PlayerHUDWidget: NativeOnMouseButtonDown called Screen=(%.0f,%.0f) Button=%s Ctrl=%d"), EntryScreen.X, EntryScreen.Y, *EntryButton.ToString(), InMouseEvent.IsControlDown() ? 1 : 0);
 
-    // Check if click is within the MinimapContainer/MapImage bounds
-    if (!MapImage || !MinimapContainer)
+    // Compute minimap bounds from exposed properties (no MapImage dependency)
+    FVector2D WidgetSize = InGeometry.GetLocalSize();
+    FVector2D Size = MinimapSize;
+    if (WidgetSize.X <= 0 || WidgetSize.Y <= 0 || Size.X <= 0 || Size.Y <= 0)
     {
-        UE_LOG(LogCoding, Verbose, TEXT("PlayerHUDWidget: MapImage or MinimapContainer is null. MapImage=%s MinimapContainer=%s"), MapImage ? TEXT("Valid") : TEXT("Null"), MinimapContainer ? TEXT("Valid") : TEXT("Null"));
         return Super::NativeOnMouseButtonDown(InGeometry, InMouseEvent);
+    }
+    FVector2D MinimapTopLeft;
+    switch (MinimapAnchorCorner)
+    {
+        case 0: // TopLeft
+            MinimapTopLeft = FVector2D(MinimapOffset.X, MinimapOffset.Y);
+            break;
+        case 1: // TopRight
+            MinimapTopLeft = FVector2D(WidgetSize.X - Size.X - MinimapOffset.X, MinimapOffset.Y);
+            break;
+        case 2: // BottomLeft (default)
+            MinimapTopLeft = FVector2D(MinimapOffset.X, WidgetSize.Y - Size.Y - MinimapOffset.Y);
+            break;
+        case 3: // BottomRight
+        default:
+            MinimapTopLeft = FVector2D(WidgetSize.X - Size.X - MinimapOffset.X, WidgetSize.Y - Size.Y - MinimapOffset.Y);
+            break;
     }
 
     // Screen position of the click
@@ -576,16 +625,16 @@ FReply UPlayerHUDWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, co
             }
         }
     }
-    // Get the geometry of the MapImage (used only if click is inside minimap)
-    FGeometry MapGeometry = MapImage->GetCachedGeometry();
-    FVector2D LocalPos = MapGeometry.AbsoluteToLocal(ScreenPos);
-    FVector2D Size = MapGeometry.GetLocalSize();
+    // Convert the screen pos to local coords and compute local pos relative to minimap
+    FVector2D LocalPos = InGeometry.AbsoluteToLocal(ScreenPos);
+    FVector2D MinimapLocalPos = LocalPos - MinimapTopLeft;
+    // Reuse LocalPos variable as the local position within the minimap when inside
 
     // Prepare world hit; we'll compute differently depending on whether click was inside minimap
     FVector WorldHit = FVector::ZeroVector;
 
     bool bInsideMap = true;
-    if (LocalPos.X < 0 || LocalPos.Y < 0 || LocalPos.X > Size.X || LocalPos.Y > Size.Y)
+    if (MinimapLocalPos.X < 0 || MinimapLocalPos.Y < 0 || MinimapLocalPos.X > Size.X || MinimapLocalPos.Y > Size.Y)
     {
         bInsideMap = false;
     }
@@ -607,18 +656,18 @@ FReply UPlayerHUDWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, co
     if (bInsideMap)
     {
         // Left-click on minimap:
-        // - If camera is unlocked: move camera to that location
-        // - If camera is locked: consume and do nothing (pings are world only)
+        // - Normal click with camera unlocked: move camera to that location
+        // - Alt+click or Ctrl+click: open ping wheel at that location
+        // - Normal click with camera locked: open ping wheel (for convenience)
         // Right-click on minimap: always move/attack
         if (Button == EKeys::LeftMouseButton)
         {
-            // Left-click on minimap: if Ctrl is held, open ping wheel; otherwise consume without moving camera
             if (Size.X <= 0 || Size.Y <= 0)
             {
                 return FReply::Handled();
             }
-
-            FVector2D Normalized(LocalPos.X / Size.X, LocalPos.Y / Size.Y);
+            // Compute normalized coords from minimap-local position
+            FVector2D Normalized(MinimapLocalPos.X / Size.X, MinimapLocalPos.Y / Size.Y);
             float NX = (Normalized.X - 0.5f);
             float NY = (0.5f - Normalized.Y);
 
@@ -635,22 +684,50 @@ FReply UPlayerHUDWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, co
             WorldHit.Y = WorldCenter.Y + NY * 2.0f * WorldBoundsHalfSize.Y;
             WorldHit.Z = 0.0f;
 
-            if (bCtrl)
+            // Check if Alt is held (for ping)
+            bool bAlt = InMouseEvent.IsAltDown();
+            if (!bAlt && FSlateApplication::IsInitialized())
             {
-                // Open ping wheel at this world location
-                ShowPingWheelAtWorldLocation(WorldHit);
+                bAlt = FSlateApplication::Get().GetModifierKeys().IsAltDown();
+            }
+            if (!bAlt && MPC)
+            {
+                bAlt = MPC->IsInputKeyDown(EKeys::LeftAlt) || MPC->IsInputKeyDown(EKeys::RightAlt);
+            }
+
+            // Ctrl+Click or Alt+Click: open ping wheel
+            if (bCtrl || bAlt)
+            {
+                UE_LOG(LogCoding, Display, TEXT("PlayerHUDWidget: Minimap Ctrl/Alt+left-click - opening ping wheel at world %s"), *WorldHit.ToString());
+                if (PingWheelClass)
+                {
+                    ShowPingWheelAtScreenLocation(ScreenPos, WorldHit);
+                }
+                else if (MPC)
+                {
+                    MPC->Server_RequestPing(WorldHit, EMapPingType::Ping_OnMyWay);
+                }
                 return FReply::Handled();
             }
 
-            // If the camera is unlocked, allow left-click on minimap to move the camera
+            // Normal left-click: move camera if unlocked
             if (bCameraUnlocked && MPC)
             {
-                UE_LOG(LogCoding, Display, TEXT("PlayerHUDWidget: Minimap left-click with camera unlocked - moving camera to %s (LocalPos=%.1f,%.1f Size=%.1f,%.1f Norm=%.3f,%.3f NX=%.3f NY=%.3f WorldCenter=%.1f,%.1f WorldBounds=%.1f,%.1f)"), 
-                    *WorldHit.ToString(), LocalPos.X, LocalPos.Y, Size.X, Size.Y, Normalized.X, Normalized.Y, NX, NY, WorldCenter.X, WorldCenter.Y, WorldBoundsHalfSize.X, WorldBoundsHalfSize.Y);
+                UE_LOG(LogCoding, Display, TEXT("PlayerHUDWidget: Minimap left-click with camera unlocked - moving camera to %s"), *WorldHit.ToString());
                 MPC->MoveCameraToWorldLocation(WorldHit);
+                return FReply::Handled();
             }
 
-            // Consume left-clicks on minimap (do not move pawn unless it's a right-click)
+            // Camera is locked and no modifier - open ping wheel as convenience
+            UE_LOG(LogCoding, Display, TEXT("PlayerHUDWidget: Minimap left-click with camera locked - opening ping wheel at world %s"), *WorldHit.ToString());
+            if (PingWheelClass)
+            {
+                ShowPingWheelAtScreenLocation(ScreenPos, WorldHit);
+            }
+            else if (MPC)
+            {
+                MPC->Server_RequestPing(WorldHit, EMapPingType::Ping_OnMyWay);
+            }
             return FReply::Handled();
         }
         
@@ -665,8 +742,8 @@ FReply UPlayerHUDWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, co
             return Super::NativeOnMouseButtonDown(InGeometry, InMouseEvent);
         }
 
-        // Normalized coordinates (0..1)
-        FVector2D Normalized(LocalPos.X / Size.X, LocalPos.Y / Size.Y);
+        // Normalized coordinates (0..1) based on minimap-local position
+        FVector2D Normalized(MinimapLocalPos.X / Size.X, MinimapLocalPos.Y / Size.Y);
 
             UE_LOG(LogCoding, Verbose, TEXT("PlayerHUDWidget: Minimap RightClick Ctrl=%d Normalized=(%.3f,%.3f) LocalPos=(%.1f,%.1f) Size=(%.1f,%.1f) WorldBoundsHalfSize=(%.1f,%.1f)"), bCtrl ? 1 : 0, Normalized.X, Normalized.Y, LocalPos.X, LocalPos.Y, Size.X, Size.Y, WorldBoundsHalfSize.X, WorldBoundsHalfSize.Y);
 
@@ -756,8 +833,8 @@ FReply UPlayerHUDWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, co
                 // Ctrl+Click -> show ping wheel if available, otherwise send a default ping
                 if (PingWheelClass)
                 {
-                    // Show ping wheel centered on the minimap click using the actual screen pos (ensures correct placement)
-                    ShowPingWheelAtScreenLocation(ScreenPos);
+                    // Show ping wheel centered on the click using the actual screen pos and world location
+                    ShowPingWheelAtScreenLocation(ScreenPos, WorldHit);
                 }
                 else
                 {
@@ -835,37 +912,359 @@ int32 UPlayerHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& All
 {
     int32 RetLayer = Super::NativePaint(Args, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
 
-    // Only draw minimap elements if we have a MapImage
-    if (!MapImage)
+    // Calculate minimap position based on exposed properties (no MapImage dependency)
+    FVector2D WidgetSize = AllottedGeometry.GetLocalSize();
+    FVector2D Size = MinimapSize;
+    
+    // Skip if size is invalid
+    if (Size.X <= 0 || Size.Y <= 0 || WidgetSize.X <= 0 || WidgetSize.Y <= 0)
     {
         return RetLayer;
     }
-
-    // Get the geometry of the MapImage for drawing
-    FGeometry MapGeometry = MapImage->GetCachedGeometry();
-    FVector2D Size = MapGeometry.GetLocalSize();
-
-    if (Size.X <= 0 || Size.Y <= 0)
+    
+    // Calculate minimap top-left position based on anchor corner and offset
+    // MinimapAnchorCorner: 0 = TopLeft, 1 = TopRight, 2 = BottomLeft, 3 = BottomRight
+    FVector2D MinimapTopLeft;
+    switch (MinimapAnchorCorner)
     {
-        return RetLayer;
+        case 0: // TopLeft
+            MinimapTopLeft = FVector2D(MinimapOffset.X, MinimapOffset.Y);
+            break;
+        case 1: // TopRight
+            MinimapTopLeft = FVector2D(WidgetSize.X - Size.X - MinimapOffset.X, MinimapOffset.Y);
+            break;
+        case 2: // BottomLeft (default)
+            MinimapTopLeft = FVector2D(MinimapOffset.X, WidgetSize.Y - Size.Y - MinimapOffset.Y);
+            break;
+        case 3: // BottomRight
+        default:
+            MinimapTopLeft = FVector2D(WidgetSize.X - Size.X - MinimapOffset.X, WidgetSize.Y - Size.Y - MinimapOffset.Y);
+            break;
     }
+    
+    // Create a paint geometry for the minimap area
+    FPaintGeometry MinimapPaintGeom = AllottedGeometry.ToPaintGeometry(MinimapTopLeft, Size);
+    
+    // Create a virtual "MapGeometry" for icon/fog drawing calculations
+    // This is a child geometry offset to the minimap position
+    FGeometry MapGeometry = AllottedGeometry.MakeChild(Size, FSlateLayoutTransform(MinimapTopLeft));
 
-    // Debug: log MapImage geometry and widget transforms if requested
+    // Debug: log minimap geometry if requested
     if (bShowMinimapDebugLabels)
     {
-        FVector2D AbsPos = MapGeometry.GetAbsolutePosition();
-        FVector2D AbsSize = MapGeometry.GetAbsoluteSize();
-        FVector2D LocalSize = MapGeometry.GetLocalSize();
-        // For now, just print a default scale (we can enhance this to detect DPI per-monitor later)
-        FVector2D Scale(1.0f, 1.0f);
-        UE_LOG(LogCoding, Display, TEXT("PlayerHUDWidget: MapGeometry AbsPos=(%.1f,%.1f) AbsSize=(%.1f,%.1f) LocalSize=(%.1f,%.1f) Scale=(%.3f,%.3f)"), AbsPos.X, AbsPos.Y, AbsSize.X, AbsSize.Y, LocalSize.X, LocalSize.Y, Scale.X, Scale.Y);
+        UE_LOG(LogCoding, Display, TEXT("PlayerHUDWidget: Minimap TopLeft=(%.1f,%.1f) Size=(%.1f,%.1f) AnchorCorner=%d"), 
+            MinimapTopLeft.X, MinimapTopLeft.Y, Size.X, Size.Y, MinimapAnchorCorner);
     }
 
     const float MarkerSize = 8.0f;
 
+    // Draw the minimap background texture
+    if (MinimapTexture)
+    {
+        FSlateBrush MapBrush;
+        MapBrush.SetResourceObject(const_cast<UTexture2D*>(MinimapTexture));
+        MapBrush.ImageSize = Size;
+        MapBrush.DrawAs = ESlateBrushDrawType::Image;
+        
+        FSlateDrawElement::MakeBox(
+            OutDrawElements,
+            RetLayer + 1,
+            MinimapPaintGeom,
+            &MapBrush,
+            ESlateDrawEffect::None,
+            FLinearColor::White
+        );
+        RetLayer += 1;
+    }
+
     // Debug: force-draw helpers (temporary)
     const int32 DebugLayerOffset = 1000; // draw well above normal UI for visibility while debugging
     const bool bForceDebugDraw = (bShowMinimapDebugOutline || bShowMinimapDebugLabels);
+
+    // ===== Draw FOW Overlay on Minimap (Texture-based smooth) =====
+    // Prefer drawing a supplied fog texture (or render target) for best smoothness; otherwise fall back to grid blending
+    if (bDrawFOWOverlay && FogManager)
+    {
+        const FSlateBrush* WhiteBrush = FCoreStyle::Get().GetBrush(TEXT("WhiteBrush"));
+        // Clamp grid size at runtime to reasonable values
+        int32 GridSizeLocal = FMath::Clamp(FOWOverlayGridSize, 2, 512);
+        const float CellWidth = Size.X / GridSizeLocal;
+        const float CellHeight = Size.Y / GridSizeLocal;
+
+        // Attempt to draw a high-resolution fog texture/render target provided by FogManager
+        // We use custom vertices to apply the same UV transformations as the minimap icons
+        // (swap XY, invert X/Y) so the fog aligns correctly with the map
+        if (bUseFogTextureOverlay)
+        {
+            UTexture* FogTexture = nullptr;
+            // Prefer team-specific texture (UTexture2D) if available; else try render target
+            FogTexture = FogManager->GetLocalTeamFogTexture();
+            if (!FogTexture)
+            {
+                FogTexture = FogManager->GetFogRenderTarget();
+            }
+
+            if (FogTexture)
+            {
+                // If we prefer grid overlay computation, skip directly to the grid overlay
+                if (bPreferGridFOWOverlay)
+                {
+                    // Skip texture drawing; grid-based overlay will proceed below
+                }
+                else
+                {
+                FSlateBrush FogBrush;
+                FogBrush.SetResourceObject(FogTexture);
+                FogBrush.ImageSize = Size;
+                FogBrush.DrawAs = ESlateBrushDrawType::Image;
+
+                FLinearColor Tint = FLinearColor::White;
+                Tint.A = FogOverlayTextureOpacity;
+
+                // Calculate transformed UVs to match minimap coordinate system
+                // The fog texture uses world coordinates directly, but minimap may have:
+                // - bSwapMinimapXY: swap U and V
+                // - bInvertMinimapX: flip U
+                // - bInvertMinimapY: flip V
+                // We need to apply the INVERSE transformations to the UVs
+
+                // Base UV corners: TopLeft(0,0), TopRight(1,0), BottomRight(1,1), BottomLeft(0,1)
+                FVector2D UV_TL(0.0f, 0.0f);
+                FVector2D UV_TR(1.0f, 0.0f);
+                FVector2D UV_BR(1.0f, 1.0f);
+                FVector2D UV_BL(0.0f, 1.0f);
+
+                // Apply inversion first (before swap)
+                if (bInvertMinimapX)
+                {
+                    // Flip horizontally: swap left and right U values
+                    Swap(UV_TL.X, UV_TR.X);
+                    Swap(UV_BL.X, UV_BR.X);
+                }
+                if (bInvertMinimapY)
+                {
+                    // Flip vertically: swap top and bottom V values
+                    Swap(UV_TL.Y, UV_BL.Y);
+                    Swap(UV_TR.Y, UV_BR.Y);
+                }
+
+                // Apply XY swap (rotates the texture 90 degrees and flips)
+                if (bSwapMinimapXY)
+                {
+                    // Swap U and V for each corner
+                    Swap(UV_TL.X, UV_TL.Y);
+                    Swap(UV_TR.X, UV_TR.Y);
+                    Swap(UV_BR.X, UV_BR.Y);
+                    Swap(UV_BL.X, UV_BL.Y);
+                }
+
+                // Optional Y flip for fog texture
+                if (bForceFogTextureFlipY)
+                {
+                    Swap(UV_TL.Y, UV_BL.Y);
+                    Swap(UV_TR.Y, UV_BR.Y);
+                }
+
+                // Get absolute position/size for vertices
+                FVector2D AbsPos = MapGeometry.GetAbsolutePosition();
+                FVector2D AbsSize = MapGeometry.GetAbsoluteSize();
+
+                // Build custom vertices (clockwise: TL, TR, BR, BL for two triangles)
+                TArray<FSlateVertex> Vertices;
+                Vertices.SetNum(4);
+
+                // Colors as FColor
+                FColor VertexColor = Tint.ToFColor(true);
+
+                // TopLeft
+                Vertices[0].Position = FVector2f(AbsPos.X, AbsPos.Y);
+                Vertices[0].TexCoords[0] = UV_TL.X;
+                Vertices[0].TexCoords[1] = UV_TL.Y;
+                Vertices[0].TexCoords[2] = 0.0f;
+                Vertices[0].TexCoords[3] = 0.0f;
+                Vertices[0].Color = VertexColor;
+
+                // TopRight
+                Vertices[1].Position = FVector2f(AbsPos.X + AbsSize.X, AbsPos.Y);
+                Vertices[1].TexCoords[0] = UV_TR.X;
+                Vertices[1].TexCoords[1] = UV_TR.Y;
+                Vertices[1].TexCoords[2] = 0.0f;
+                Vertices[1].TexCoords[3] = 0.0f;
+                Vertices[1].Color = VertexColor;
+
+                // BottomRight
+                Vertices[2].Position = FVector2f(AbsPos.X + AbsSize.X, AbsPos.Y + AbsSize.Y);
+                Vertices[2].TexCoords[0] = UV_BR.X;
+                Vertices[2].TexCoords[1] = UV_BR.Y;
+                Vertices[2].TexCoords[2] = 0.0f;
+                Vertices[2].TexCoords[3] = 0.0f;
+                Vertices[2].Color = VertexColor;
+
+                // BottomLeft
+                Vertices[3].Position = FVector2f(AbsPos.X, AbsPos.Y + AbsSize.Y);
+                Vertices[3].TexCoords[0] = UV_BL.X;
+                Vertices[3].TexCoords[1] = UV_BL.Y;
+                Vertices[3].TexCoords[2] = 0.0f;
+                Vertices[3].TexCoords[3] = 0.0f;
+                Vertices[3].Color = VertexColor;
+
+                // Two triangles: (0,1,2) and (0,2,3)
+                TArray<SlateIndex> Indices;
+                Indices.Add(0);
+                Indices.Add(1);
+                Indices.Add(2);
+                Indices.Add(0);
+                Indices.Add(2);
+                Indices.Add(3);
+
+                // Get the resource handle from the brush
+                const FSlateResourceHandle& ResourceHandle = FSlateApplication::Get().GetRenderer()->GetResourceHandle(FogBrush);
+
+                FSlateDrawElement::MakeCustomVerts(
+                    OutDrawElements,
+                    RetLayer + 1,
+                    ResourceHandle,
+                    Vertices,
+                    Indices,
+                    nullptr, // InstanceData
+                    0,       // InstanceOffset
+                    0        // NumInstances
+                );
+
+                    RetLayer += 1;
+                    goto AfterFOWOverlay;
+                }
+            }
+        }
+
+        // Lambda to convert normalized minimap coords to world position
+        auto NormToWorld = [this](float NormX, float NormY) -> FVector
+        {
+            float WX = NormX - 0.5f;
+            float WY = 0.5f - NormY;
+            if (bSwapMinimapXY) { float Tmp = WX; WX = WY; WY = Tmp; }
+            if (bInvertMinimapX) WX = -WX;
+            if (bInvertMinimapY) WY = -WY;
+            float WorldX = WX * 2.0f * WorldBoundsHalfSize.X + WorldCenter.X;
+            float WorldY = WY * 2.0f * WorldBoundsHalfSize.Y + WorldCenter.Y;
+            return FVector(WorldX, WorldY, 0.0f);
+        };
+
+        // Lambda to get visibility value (0 = hidden, 0.5 = explored, 1 = visible)
+        auto GetVisibilityValue = [this](const FVector& WorldPos) -> float
+        {
+            EFogState State = FogManager->GetFogStateAtLocation(WorldPos, LocalPlayerTeamID);
+            if (State == EFogState::Visible) return 1.0f;
+            if (State == EFogState::Explored) return 0.5f;
+            return 0.0f; // Hidden
+        };
+
+        for (int32 GridY = 0; GridY < FOWOverlayGridSize; ++GridY)
+        {
+            for (int32 GridX = 0; GridX < FOWOverlayGridSize; ++GridX)
+            {
+                // Multi-sample: check center and surrounding samples for smooth blending
+                float NormCenterX = (GridX + 0.5f) / (float)GridSizeLocal;
+                float NormCenterY = (GridY + 0.5f) / (float)GridSizeLocal;
+
+                float VisSum = 0.0f;
+                int32 SampleCount = 0;
+
+                int32 SmoothSamples = FMath::Clamp(FOWOverlaySmoothSamples, 1, 9);
+                if (SmoothSamples <= 1)
+                {
+                    // Single sample: center only
+                    FVector WorldCenterPos = NormToWorld(NormCenterX, NormCenterY);
+                    VisSum += GetVisibilityValue(WorldCenterPos);
+                    SampleCount += 1;
+                }
+                else if (SmoothSamples <= 5)
+                {
+                    // 5-sample: center (weighted) + 4 corners, like previous approach
+                    const float SampleOffset = 0.35f / (float)GridSizeLocal; // Slightly inside cell edges
+                    FVector WorldCenterPos = NormToWorld(NormCenterX, NormCenterY);
+                    VisSum += GetVisibilityValue(WorldCenterPos) * 2.0f;
+                    SampleCount += 2;
+
+                    FVector WorldTL = NormToWorld(NormCenterX - SampleOffset, NormCenterY - SampleOffset);
+                    FVector WorldTR = NormToWorld(NormCenterX + SampleOffset, NormCenterY - SampleOffset);
+                    FVector WorldBL = NormToWorld(NormCenterX - SampleOffset, NormCenterY + SampleOffset);
+                    FVector WorldBR = NormToWorld(NormCenterX + SampleOffset, NormCenterY + SampleOffset);
+                    VisSum += GetVisibilityValue(WorldTL);
+                    VisSum += GetVisibilityValue(WorldTR);
+                    VisSum += GetVisibilityValue(WorldBL);
+                    VisSum += GetVisibilityValue(WorldBR);
+                    SampleCount += 4;
+                }
+                else
+                {
+                    // 9-sample: 3x3 grid inside the cell
+                    float Step = 1.0f / (float)GridSizeLocal; // normalized step per cell
+                    float OffsetScale = (1.0f / 3.0f) * Step; // positions at -1/3, 0, +1/3 of cell
+                    for (int32 iy = -1; iy <= 1; ++iy)
+                    {
+                        for (int32 ix = -1; ix <= 1; ++ix)
+                        {
+                            float SampleX = NormCenterX + ix * OffsetScale;
+                            float SampleY = NormCenterY + iy * OffsetScale;
+                            FVector WorldPos = NormToWorld(SampleX, SampleY);
+                            VisSum += GetVisibilityValue(WorldPos);
+                            SampleCount += 1;
+                        }
+                    }
+                }
+                
+                // Average visibility (0 = fully hidden, 1 = fully visible)
+                float AvgVisibility = VisSum / SampleCount;
+                
+                // Skip if fully visible
+                if (AvgVisibility >= 0.99f)
+                {
+                    continue;
+                }
+                
+                // Interpolate between hidden and explored colors based on visibility
+                // AvgVisibility: 0 = hidden, 0.5 = explored, 1 = visible
+                FLinearColor OverlayColor;
+                if (AvgVisibility <= 0.5f)
+                {
+                    // Blend from hidden (0) to explored (0.5)
+                    float T = AvgVisibility * 2.0f; // 0 to 1
+                    OverlayColor = FMath::Lerp(FOWHiddenColor, FOWExploredColor, T);
+                }
+                else
+                {
+                    // Blend from explored (0.5) to visible (1.0 = transparent)
+                    float T = (AvgVisibility - 0.5f) * 2.0f; // 0 to 1
+                    FLinearColor Transparent = FOWExploredColor;
+                    Transparent.A = 0.0f;
+                    OverlayColor = FMath::Lerp(FOWExploredColor, Transparent, T);
+                }
+                
+                // Skip if effectively transparent
+                if (OverlayColor.A < 0.01f)
+                {
+                    continue;
+                }
+
+                // Calculate pixel position for this cell
+                FVector2D TopLeft(GridX * CellWidth, GridY * CellHeight);
+                FVector2D CellSize(CellWidth, CellHeight);
+
+                FSlateDrawElement::MakeBox(
+                    OutDrawElements,
+                    RetLayer + 1,
+                    MapGeometry.ToPaintGeometry(TopLeft, CellSize),
+                    WhiteBrush,
+                    ESlateDrawEffect::None,
+                    OverlayColor
+                );
+            }
+        }
+        RetLayer += 1;
+    }
+AfterFOWOverlay:
+
     // Draw pings as small crosses on the minimap
     for (TWeakObjectPtr<AMapPing> WeakPing : CachedPings)
     {
@@ -952,7 +1351,7 @@ int32 UPlayerHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& All
         RetLayer += 1;
     }
 
-    // Draw minimap icons (allies, minions, towers)
+    // Draw minimap icons (allies, minions, towers, champions)
     for (const FMinimapIcon& Icon : CachedIcons)
     {
         // Visibility is already filtered in NativeTick with FOW checks
@@ -974,32 +1373,196 @@ int32 UPlayerHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& All
         FVector2D PixelPos = FVector2D(Norm.X * Size.X, Norm.Y * Size.Y);
         float S = Icon.Size;
 
-        // If forcing debug draw, draw a filled box using the white brush tinted to Icon.Color and larger size
-        if (bForceDebugDraw)
+        // Draw based on IconType
+        switch (Icon.IconType)
         {
-            const float DrawSize = FMath::Max(12.0f, S * 3.0f);
-            const FSlateBrush* WhiteBrush = FCoreStyle::Get().GetBrush(TEXT("WhiteBrush"));
-            // Draw a thick outline rectangle as a visible marker (avoid using ToOffsetPaintGeometry overloads)
-            TArray<FVector2D> BoxPoints;
-            BoxPoints.Add(PixelPos + FVector2D(-DrawSize, -DrawSize));
-            BoxPoints.Add(PixelPos + FVector2D(DrawSize, -DrawSize));
-            BoxPoints.Add(PixelPos + FVector2D(DrawSize, DrawSize));
-            BoxPoints.Add(PixelPos + FVector2D(-DrawSize, DrawSize));
-            BoxPoints.Add(PixelPos + FVector2D(-DrawSize, -DrawSize));
+        case EMinimapIconType::Icon_Minion:
+        {
+            // Draw a filled circle for minions
+            const int32 NumSegments = 12;
+            TArray<FVector2D> CirclePoints;
+            for (int32 i = 0; i <= NumSegments; ++i)
+            {
+                float Angle = 2.0f * PI * i / NumSegments;
+                CirclePoints.Add(PixelPos + FVector2D(FMath::Cos(Angle) * S, FMath::Sin(Angle) * S));
+            }
+            // Draw filled circle using lines (approximate with thick lines)
             FSlateDrawElement::MakeLines(
                 OutDrawElements,
-                RetLayer + DebugLayerOffset + 2,
+                RetLayer + 1,
                 MapGeometry.ToPaintGeometry(),
-                BoxPoints,
+                CirclePoints,
                 ESlateDrawEffect::None,
                 DrawColor,
                 true,
-                6.0f
+                S * 0.8f  // Thick lines to appear filled
             );
+            RetLayer += 1;
+            break;
         }
-        else
+        case EMinimapIconType::Icon_Tower:
         {
-            // Draw a filled box using MakeBox centered on the PixelPos
+            // Draw tower: if texture exists use it, otherwise draw a diamond shape
+            // Prefer team-specific texture if set, fall back to generic texture
+            UTexture2D* TowerTexture = (Icon.TeamID == 0) ? MinimapIcon_Tower_Team0 : MinimapIcon_Tower_Team1;
+            if (TowerTexture)
+            {
+                FSlateBrush TowerBrush;
+                TowerBrush.SetResourceObject(TowerTexture);
+                TowerBrush.ImageSize = FVector2D(S * 2.5f, S * 2.5f);
+                TowerBrush.DrawAs = ESlateBrushDrawType::Image;
+                FVector2D BoxSize(S * 2.5f, S * 2.5f);
+                FVector2D TopLeft = PixelPos - BoxSize * 0.5f;
+                FSlateDrawElement::MakeBox(
+                    OutDrawElements,
+                    RetLayer + 1,
+                    MapGeometry.ToPaintGeometry(TopLeft, BoxSize),
+                    &TowerBrush,
+                    ESlateDrawEffect::None,
+                    DrawColor
+                );
+            }
+            else
+            {
+                // Diamond shape fallback
+                TArray<FVector2D> DiamondPoints;
+                DiamondPoints.Add(PixelPos + FVector2D(0, -S * 1.5f));
+                DiamondPoints.Add(PixelPos + FVector2D(S * 1.5f, 0));
+                DiamondPoints.Add(PixelPos + FVector2D(0, S * 1.5f));
+                DiamondPoints.Add(PixelPos + FVector2D(-S * 1.5f, 0));
+                DiamondPoints.Add(PixelPos + FVector2D(0, -S * 1.5f));
+                FSlateDrawElement::MakeLines(
+                    OutDrawElements,
+                    RetLayer + 1,
+                    MapGeometry.ToPaintGeometry(),
+                    DiamondPoints,
+                    ESlateDrawEffect::None,
+                    DrawColor,
+                    true,
+                    3.0f
+                );
+            }
+            RetLayer += 1;
+            break;
+        }
+        case EMinimapIconType::Icon_Object:
+        {
+            // Nexus: larger star or image
+            float NexusSize = S * 2.0f;
+            // Prefer team-specific texture if set, fall back to generic texture
+            UTexture2D* NexusTexture = (Icon.TeamID == 0) ? MinimapIcon_Nexus_Team0 : MinimapIcon_Nexus_Team1;
+            if (NexusTexture)
+            {
+                FSlateBrush NexusBrush;
+                NexusBrush.SetResourceObject(NexusTexture);
+                NexusBrush.ImageSize = FVector2D(NexusSize * 2.0f, NexusSize * 2.0f);
+                NexusBrush.DrawAs = ESlateBrushDrawType::Image;
+                FVector2D BoxSize(NexusSize * 2.0f, NexusSize * 2.0f);
+                FVector2D TopLeft = PixelPos - BoxSize * 0.5f;
+                FSlateDrawElement::MakeBox(
+                    OutDrawElements,
+                    RetLayer + 1,
+                    MapGeometry.ToPaintGeometry(TopLeft, BoxSize),
+                    &NexusBrush,
+                    ESlateDrawEffect::None,
+                    DrawColor
+                );
+            }
+            else
+            {
+                // Star shape fallback (6-pointed)
+                TArray<FVector2D> StarPoints;
+                for (int32 i = 0; i <= 12; ++i)
+                {
+                    float Angle = PI * i / 6.0f;
+                    float R = (i % 2 == 0) ? NexusSize : NexusSize * 0.5f;
+                    StarPoints.Add(PixelPos + FVector2D(FMath::Cos(Angle) * R, FMath::Sin(Angle) * R));
+                }
+                FSlateDrawElement::MakeLines(
+                    OutDrawElements,
+                    RetLayer + 1,
+                    MapGeometry.ToPaintGeometry(),
+                    StarPoints,
+                    ESlateDrawEffect::None,
+                    DrawColor,
+                    true,
+                    2.5f
+                );
+            }
+            RetLayer += 1;
+            break;
+        }
+        case EMinimapIconType::Icon_Hero:
+        {
+            // Champion: circular portrait with team-colored border
+            float ChampSize = S * 2.0f;
+            FLinearColor BorderColor = (Icon.TeamID == 0) ? FLinearColor(0.2f, 0.4f, 1.0f, 1.0f) : FLinearColor(1.0f, 0.2f, 0.2f, 1.0f);
+            if (Icon.bGhost) BorderColor.A *= ExploredGhostAlpha;
+
+            // Draw border circle first (larger)
+            const int32 NumSegments = 16;
+            TArray<FVector2D> BorderCircle;
+            float BorderRadius = ChampSize + ChampionBorderThickness;
+            for (int32 i = 0; i <= NumSegments; ++i)
+            {
+                float Angle = 2.0f * PI * i / NumSegments;
+                BorderCircle.Add(PixelPos + FVector2D(FMath::Cos(Angle) * BorderRadius, FMath::Sin(Angle) * BorderRadius));
+            }
+            FSlateDrawElement::MakeLines(
+                OutDrawElements,
+                RetLayer + 1,
+                MapGeometry.ToPaintGeometry(),
+                BorderCircle,
+                ESlateDrawEffect::None,
+                BorderColor,
+                true,
+                ChampionBorderThickness * 2.0f
+            );
+
+            // Draw champion portrait or filled circle
+            if (MinimapIcon_Champion)
+            {
+                FSlateBrush ChampBrush;
+                ChampBrush.SetResourceObject(MinimapIcon_Champion);
+                ChampBrush.ImageSize = FVector2D(ChampSize * 2.0f, ChampSize * 2.0f);
+                ChampBrush.DrawAs = ESlateBrushDrawType::Image;
+                FVector2D BoxSize(ChampSize * 2.0f, ChampSize * 2.0f);
+                FVector2D TopLeft = PixelPos - BoxSize * 0.5f;
+                FSlateDrawElement::MakeBox(
+                    OutDrawElements,
+                    RetLayer + 2,
+                    MapGeometry.ToPaintGeometry(TopLeft, BoxSize),
+                    &ChampBrush,
+                    ESlateDrawEffect::None,
+                    DrawColor
+                );
+            }
+            else
+            {
+                // Filled circle fallback
+                TArray<FVector2D> InnerCircle;
+                for (int32 i = 0; i <= NumSegments; ++i)
+                {
+                    float Angle = 2.0f * PI * i / NumSegments;
+                    InnerCircle.Add(PixelPos + FVector2D(FMath::Cos(Angle) * ChampSize, FMath::Sin(Angle) * ChampSize));
+                }
+                FSlateDrawElement::MakeLines(
+                    OutDrawElements,
+                    RetLayer + 2,
+                    MapGeometry.ToPaintGeometry(),
+                    InnerCircle,
+                    ESlateDrawEffect::None,
+                    DrawColor,
+                    true,
+                    ChampSize * 0.8f
+                );
+            }
+            RetLayer += 2;
+            break;
+        }
+        default:
+        {
+            // Default: simple filled box (legacy)
             const FSlateBrush* WhiteBrush = FCoreStyle::Get().GetBrush(TEXT("WhiteBrush"));
             FVector2D BoxSize(2.0f * S, 2.0f * S);
             FVector2D TopLeft = PixelPos - BoxSize * 0.5f;
@@ -1012,6 +1575,8 @@ int32 UPlayerHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& All
                 DrawColor
             );
             RetLayer += 1;
+            break;
+        }
         }
     }
 
@@ -1251,7 +1816,7 @@ void UPlayerHUDWidget::ShowPingWheelAtWorldLocation(const FVector& WorldLocation
     }
 }
 
-void UPlayerHUDWidget::ShowPingWheelAtScreenLocation(const FVector2D& ScreenLocation)
+void UPlayerHUDWidget::ShowPingWheelAtScreenLocation(const FVector2D& ScreenLocation, const FVector& WorldLocation)
 {
     if (!PingWheelClass)
     {
@@ -1272,10 +1837,11 @@ void UPlayerHUDWidget::ShowPingWheelAtScreenLocation(const FVector2D& ScreenLoca
         return;
     }
 
-    // Optionally set the world location on the internal widget if it expects it (don't require)
+    // Set the world location on the ping wheel widget so the ping appears at the correct location
     if (UPingWheelWidget* PW = Cast<UPingWheelWidget>(PingWheelInstance))
     {
-        // no world location provided here
+        PW->SetCenterWorldLocation(WorldLocation);
+        UE_LOG(LogCoding, Display, TEXT("ShowPingWheelAtScreenLocation: Set ping wheel world location to %s"), *WorldLocation.ToString());
     }
 
     PingWheelInstance->AddToViewport();
