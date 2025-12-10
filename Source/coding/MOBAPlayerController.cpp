@@ -33,6 +33,7 @@
 #include "NavigationPath.h"
 #include "NiagaraFunctionLibrary.h"
 #include "NiagaraSystem.h"
+#include "Blueprint/WidgetLayoutLibrary.h"
 
 AMOBAPlayerController::AMOBAPlayerController()
 {
@@ -172,6 +173,8 @@ void AMOBAPlayerController::SetupInputComponent()
 
 		// Debug: bind K to toggle minimap X<->Y swap at runtime
 		InputComponent->BindKey(EKeys::K, EInputEvent::IE_Pressed, this, &AMOBAPlayerController::OnToggleMinimapSwap);
+	// Debug: bind U to cycle minimap force mapping mode (Auto/Geo/Cached)
+	InputComponent->BindKey(EKeys::U, EInputEvent::IE_Pressed, this, &AMOBAPlayerController::OnCycleMinimapForceMapping);
 
 		// Debug: bind I/O to toggle invert X and invert Y on the minimap at runtime
 		InputComponent->BindKey(EKeys::I, EInputEvent::IE_Pressed, this, &AMOBAPlayerController::OnToggleMinimapInvertX);
@@ -184,8 +187,20 @@ void AMOBAPlayerController::SetupInputComponent()
 			InputComponent->BindKey(EKeys::RightMouseButton, EInputEvent::IE_Pressed, this, &AMOBAPlayerController::OnRightClickTriggered);
 		}
         // Bind P to toggle the shop (fallback raw key input)
-        InputComponent->BindKey(EKeys::P, EInputEvent::IE_Pressed, this, &AMOBAPlayerController::OnOpenShopPressed);
+		InputComponent->BindKey(EKeys::P, EInputEvent::IE_Pressed, this, &AMOBAPlayerController::OnOpenShopPressed);
         UE_LOG(LogTemp, Log, TEXT("MOBA: Bound raw key P to shop open handler"));
+		// Bind P/M for clickable area tuning in-widget
+		InputComponent->BindKey(EKeys::P, EInputEvent::IE_Pressed, this, &AMOBAPlayerController::OnIncreaseClickablePaddingPressed);
+		InputComponent->BindKey(EKeys::B, EInputEvent::IE_Pressed, this, &AMOBAPlayerController::OnDecreaseClickablePaddingPressed);
+		InputComponent->BindKey(EKeys::M, EInputEvent::IE_Pressed, this, &AMOBAPlayerController::OnIncreaseClickableOffsetPressed);
+		InputComponent->BindKey(EKeys::N, EInputEvent::IE_Pressed, this, &AMOBAPlayerController::OnDecreaseClickableScalePressed);
+		// Toggle minimap debug overlay with T
+		InputComponent->BindKey(EKeys::T, EInputEvent::IE_Pressed, this, &AMOBAPlayerController::OnToggleMinimapDebugOverlay);
+		// Diagnostics: print minimap overlay values
+		InputComponent->BindKey(EKeys::G, EInputEvent::IE_Pressed, this, &AMOBAPlayerController::OnPrintMinimapDiagnostics);
+		// Apply last click reprojection delta to clickable offset (calibrate) on L
+		InputComponent->BindKey(EKeys::L, EInputEvent::IE_Pressed, this, &AMOBAPlayerController::OnApplyLastClickOffset);
+		UE_LOG(LogTemp, Log, TEXT("MOBA: Bound raw keys P/M to adjust clickable area (Padding/Offset)"));
     }
 }
 
@@ -224,6 +239,49 @@ void AMOBAPlayerController::OnToggleMinimapInvertY()
 	UE_LOG(LogTemp, Log, TEXT("MOBA: Requested PlayerHUDWidget invert Y toggle"));
 }
 
+void AMOBAPlayerController::OnCycleMinimapForceMapping()
+{
+	if (!PlayerHUDWidget)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("MOBA: PlayerHUDWidget not available to cycle minimap mapping mode"));
+		return;
+	}
+	PlayerHUDWidget->CycleMinimapForceMappingMode();
+	UE_LOG(LogTemp, Log, TEXT("MOBA: Requested PlayerHUDWidget cycle force mapping mode"));
+}
+
+void AMOBAPlayerController::OnToggleMinimapDebugOverlay()
+{
+	if (!PlayerHUDWidget)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("MOBA: PlayerHUDWidget not available to toggle minimap overlay"));
+		return;
+	}
+	PlayerHUDWidget->ToggleMinimapDebugOverlay();
+	UE_LOG(LogTemp, Log, TEXT("MOBA: Requested PlayerHUDWidget toggle minimap debug overlay"));
+}
+
+void AMOBAPlayerController::OnPrintMinimapDiagnostics()
+{
+	if (!PlayerHUDWidget)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("MOBA: PlayerHUDWidget not available to print minimap diagnostics"));
+		return;
+	}
+	PlayerHUDWidget->PrintMinimapDiagnostics();
+}
+
+void AMOBAPlayerController::OnApplyLastClickOffset()
+{
+	if (!PlayerHUDWidget)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("MOBA: PlayerHUDWidget not available to apply last click offset"));
+		return;
+	}
+	// Default apply with Multiplier 1.0 to fully correct measured delta
+	PlayerHUDWidget->ApplyLastClickOffsetToClickableArea(1.0f);
+}
+
 void AMOBAPlayerController::OnOpenShopPressed()
 {
 	UE_LOG(LogTemp, Log, TEXT("MOBA: OnOpenShopPressed called on controller %s"), *GetName());
@@ -232,6 +290,52 @@ void AMOBAPlayerController::OnOpenShopPressed()
 		GEngine->AddOnScreenDebugMessage(-1, 3.0f, FColor::Yellow, TEXT("MOBA: OnOpenShopPressed pressed"));
 	}
 	OpenClosestShop();
+}
+
+void AMOBAPlayerController::OnIncreaseClickablePaddingPressed()
+{
+	UE_LOG(LogTemp, Log, TEXT("MOBA: OnIncreaseClickablePaddingPressed called"));
+	if (!PlayerHUDWidget)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("MOBA: PlayerHUDWidget not available to increment clickable padding"));
+		return;
+	}
+	PlayerHUDWidget->IncrementClickableAreaPadding();
+}
+
+void AMOBAPlayerController::OnIncreaseClickableOffsetPressed()
+{
+	UE_LOG(LogTemp, Log, TEXT("MOBA: OnIncreaseClickableOffsetPressed called"));
+	if (!PlayerHUDWidget)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("MOBA: PlayerHUDWidget not available to increment clickable offset"));
+		return;
+	}
+	// Increment offset on X axis by default step (positive direction)
+	PlayerHUDWidget->IncrementClickableAreaOffset(PlayerHUDWidget->ClickableAreaOffsetStep, 0.0f);
+}
+
+void AMOBAPlayerController::OnDecreaseClickablePaddingPressed()
+{
+	UE_LOG(LogTemp, Log, TEXT("MOBA: OnDecreaseClickablePaddingPressed called"));
+	if (!PlayerHUDWidget)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("MOBA: PlayerHUDWidget not available to decrement clickable padding"));
+		return;
+	}
+	// Call increment with negative multiplier to reduce padding
+	PlayerHUDWidget->IncrementClickableAreaPadding(-1.0f);
+}
+
+void AMOBAPlayerController::OnDecreaseClickableScalePressed()
+{
+	UE_LOG(LogTemp, Log, TEXT("MOBA: OnDecreaseClickableScalePressed called"));
+	if (!PlayerHUDWidget)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("MOBA: PlayerHUDWidget not available to decrement clickable scale"));
+		return;
+	}
+	PlayerHUDWidget->IncrementClickableAreaScale(-1.0f);
 }
 
 void AMOBAPlayerController::OpenClosestShop()
@@ -394,20 +498,12 @@ void AMOBAPlayerController::OnLeftClickPressed()
 					float MouseX = 0.f, MouseY = 0.f;
 					GetMousePosition(MouseX, MouseY);
 					FVector2D CursorPos(MouseX, MouseY);
-
-					if (DesiredSize.IsNearlyZero())
-					{
-						// Widget hasn't calculated layout yet - use alignment to center
-						PW->SetAlignmentInViewport(FVector2D(0.5f, 0.5f));
-						PW->SetPositionInViewport(CursorPos, false);
-					}
-					else
-					{
-						// Position so the ping wheel is centered on cursor
-						FVector2D TopLeft = CursorPos - (DesiredSize * 0.5f);
-						PW->SetAlignmentInViewport(FVector2D(0.0f, 0.0f));
-						PW->SetPositionInViewport(TopLeft, false);
-					}
+					
+					// Calculate top-left to center widget on cursor
+					FVector2D TopLeftPos = CursorPos - (DesiredSize * 0.5f);
+					
+					// SetPositionInViewport with bRemoveDPIScale=false uses viewport coords directly
+					PW->SetPositionInViewport(TopLeftPos, false);
 				}
 			}
 			else
@@ -561,7 +657,12 @@ void AMOBAPlayerController::Server_RequestMoveTo_Implementation(const FVector& W
 		}
 		else
 		{
-			UE_LOG(LogCoding, Warning, TEXT("Multicast_SpawnCursorEffect: CursorClickEffect not set - cannot spawn"));
+			static bool bLoggedMissingCursorEffect = false;
+			if (!bLoggedMissingCursorEffect)
+			{
+				UE_LOG(LogCoding, Warning, TEXT("Multicast_SpawnCursorEffect: CursorClickEffect not set - cannot spawn"));
+				bLoggedMissingCursorEffect = true;
+			}
 		}
 	}
 

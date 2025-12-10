@@ -202,6 +202,54 @@ void UPlayerHUDWidget::NativeConstruct()
             }
         }
     }
+    // Auto-detect whether the minimap swaps X/Y axes (useful for rotated minimap textures)
+    if (bAutoDetectMinimapSwap)
+    {
+        if (APlayerController* PC = GetOwningPlayer())
+        {
+            // Attempt to project small steps along world X and world Y from the center
+            FVector Center3D(WorldCenter.X, WorldCenter.Y, 0.0f);
+            FVector StepX = Center3D + FVector(1000.0f, 0.0f, 0.0f);
+            FVector StepY = Center3D + FVector(0.0f, 1000.0f, 0.0f);
+            FVector2D S0, SX, SY;
+            bool b0 = PC->ProjectWorldLocationToScreen(Center3D, S0);
+            bool bx = PC->ProjectWorldLocationToScreen(StepX, SX);
+            bool by = PC->ProjectWorldLocationToScreen(StepY, SY);
+            if (b0 && bx && by)
+            {
+                // Delta vectors from center
+                FVector2D Dx = SX - S0;
+                FVector2D Dy = SY - S0;
+                // If the X-axis projects more strongly onto screen X than Y, we don't swap.
+                // If Y-axis projects more strongly onto screen X, we likely need to swap
+                float AbsDxX = FMath::Abs(Dx.X);
+                float AbsDxY = FMath::Abs(Dx.Y);
+                float AbsDyX = FMath::Abs(Dy.X);
+                float AbsDyY = FMath::Abs(Dy.Y);
+                bool bDetectedSwap = false;
+                if (AbsDyX > AbsDyY && AbsDyX > AbsDxX)
+                {
+                    // Y world axis maps to screen X -> swap
+                    bDetectedSwap = true;
+                }
+                else if (AbsDxX < AbsDyX && AbsDxX > AbsDxY)
+                {
+                    // X axis maps to screen Y more than X -> swap
+                    bDetectedSwap = true;
+                }
+                else
+                {
+                    bDetectedSwap = false;
+                }
+                bSwapMinimapXY = bDetectedSwap;
+                UE_LOG(LogCoding, Log, TEXT("PlayerHUDWidget: Auto-detected minimap swap=%d (Dx=(%.1f,%.1f) Dy=(%.1f,%.1f))"), bSwapMinimapXY?1:0, Dx.X, Dx.Y, Dy.X, Dy.Y);
+            }
+            else
+            {
+                UE_LOG(LogCoding, VeryVerbose, TEXT("PlayerHUDWidget: Could not auto-detect minimap swap (project failed)"));
+            }
+        }
+    }
     // Log current inversion state so it's obvious in the output
     UE_LOG(LogCoding, Log, TEXT("PlayerHUDWidget: bInvertMinimapX=%d bInvertMinimapY=%d bAutoDetectMinimapY=%d"), bInvertMinimapX?1:0, bInvertMinimapY?1:0, bAutoDetectMinimapY?1:0);
 
@@ -266,54 +314,172 @@ FVector2D UPlayerHUDWidget::GetMinimapTopLeftLocal(const FGeometry& Geometry) co
 
 bool UPlayerHUDWidget::ScreenPositionToWorld(const FGeometry& Geometry, const FVector2D& ScreenPosition, FVector& OutWorldLocation, FVector2D* OutMinimapLocal /*= nullptr*/) const
 {
-    FVector2D LocalPos = FVector2D::ZeroVector;
-    FVector2D TopLeft = FVector2D::ZeroVector;
+    // Use cached LOCAL coordinates for consistent mapping (avoids DPI scaling issues)
     FVector2D MinimapLocalPos = FVector2D::ZeroVector;
+    FVector2D Normalized = FVector2D::ZeroVector;
+    
+    // Use LOCAL cached coordinates for hit-testing consistency
+    FVector2D CachedTLLocal = CachedMinimapTopLeftLocal;
+    FVector2D CachedSizeLocal = CachedMinimapSizeLocal;
+    const bool bHaveCachedLocal = !CachedSizeLocal.IsNearlyZero();
+    
+    // Also keep absolute for fallback/reprojection
+    FVector2D CachedTLAbs = CachedMinimapTopLeftAbs;
+    FVector2D CachedSizeAbs = CachedMinimapSizeAbs;
+
+    // Compute adjusted clickable rect in LOCAL coordinates using user tunables
+    FVector2D AdjustedTopLeftLocal = CachedTLLocal;
+    FVector2D AdjustedSizeLocal = CachedSizeLocal;
+    if (!AdjustedSizeLocal.IsNearlyZero())
+    {
+        FVector2D CenterLocal = CachedTLLocal + CachedSizeLocal * 0.5f;
+        CenterLocal += ClickableAreaOffset; // tunables are now in local units
+        FVector2D HalfLocal = CachedSizeLocal * 0.5f * ClickableAreaScale;
+        HalfLocal += ClickableAreaPadding * 0.5f;
+        AdjustedTopLeftLocal = CenterLocal - HalfLocal;
+        AdjustedSizeLocal = HalfLocal * 2.0f;
+    }
+    
+    // Also compute adjusted absolute rect for reprojection later
+    FVector2D AdjustedTopLeftAbs = CachedTLAbs;
+    FVector2D AdjustedSizeAbs = CachedSizeAbs;
+    if (!AdjustedSizeAbs.IsNearlyZero())
+    {
+        // Convert local adjusted rect to absolute for reprojection
+        AdjustedTopLeftAbs = Geometry.LocalToAbsolute(AdjustedTopLeftLocal);
+        FVector2D AdjustedBRAbs = Geometry.LocalToAbsolute(AdjustedTopLeftLocal + AdjustedSizeLocal);
+        AdjustedSizeAbs = AdjustedBRAbs - AdjustedTopLeftAbs;
+    }
+    
     const bool bHaveGeometry = !Geometry.GetLocalSize().IsNearlyZero();
-    if (bHaveGeometry)
+
+    FVector CandidateWorldFromGeo = FVector::ZeroVector;
+    FVector CandidateWorldFromCached = FVector::ZeroVector;
+    bool bHaveCandidateGeo = false;
+    bool bHaveCandidateCached = false;
+
+    if (bHaveGeometry && bHaveCachedLocal)
     {
-        LocalPos = Geometry.AbsoluteToLocal(ScreenPosition);
-        TopLeft = GetMinimapTopLeftLocal(Geometry);
-        MinimapLocalPos = LocalPos - TopLeft;
+        // Convert screen position into widget-local coordinates using the given geometry
+        FVector2D LocalPos = Geometry.AbsoluteToLocal(ScreenPosition);
+        // Use cached local coordinates directly (no conversion errors)
+        MinimapLocalPos = LocalPos - AdjustedTopLeftLocal;
+        // Bounds check using adjusted local size
+        if (MinimapLocalPos.X < 0 || MinimapLocalPos.Y < 0 || MinimapLocalPos.X > AdjustedSizeLocal.X || MinimapLocalPos.Y > AdjustedSizeLocal.Y)
+        {
+            // Not inside minimap
+            return false;
+        }
+        else
+        {
+            Normalized = FVector2D(MinimapLocalPos.X / AdjustedSizeLocal.X, MinimapLocalPos.Y / AdjustedSizeLocal.Y);
+            // Candidate from geometry mapping
+            float GeoNX = (Normalized.X - 0.5f);
+            float GeoNY = (0.5f - Normalized.Y);
+            if (bSwapMinimapXY)
+            {
+                float Tmp = GeoNX; GeoNX = GeoNY; GeoNY = Tmp;
+            }
+            if (bInvertMinimapX) GeoNX = -GeoNX;
+            if (bInvertMinimapY) GeoNY = -GeoNY;
+            CandidateWorldFromGeo.X = WorldCenter.X + GeoNX * 2.0f * WorldBoundsHalfSize.X;
+            CandidateWorldFromGeo.Y = WorldCenter.Y + GeoNY * 2.0f * WorldBoundsHalfSize.Y;
+            CandidateWorldFromGeo.Z = 0.0f;
+            bHaveCandidateGeo = true;
+            if (OutMinimapLocal) *OutMinimapLocal = MinimapLocalPos;
+            // Extra debug: print geometry candidate mapping and normalized coordinates
+            if (bShowClickableClickDebug)
+            {
+                UE_LOG(LogCoding, Display, TEXT("ScreenPositionToWorld[Geo]: Screen=(%.1f,%.1f) LocalPos=(%.1f,%.1f) AdjTopLeftLocal=(%.1f,%.1f) AdjSizeLocal=(%.1f,%.1f)"),
+                    ScreenPosition.X, ScreenPosition.Y, LocalPos.X, LocalPos.Y, AdjustedTopLeftLocal.X, AdjustedTopLeftLocal.Y, AdjustedSizeLocal.X, AdjustedSizeLocal.Y);
+                UE_LOG(LogCoding, Display, TEXT("ScreenPositionToWorld[Geo]: MinimapLocalPos=(%.1f,%.1f) Normalized=(%.3f,%.3f) GeoNX=%.3f GeoNY=%.3f (after swap=%d invX=%d invY=%d)"),
+                    MinimapLocalPos.X, MinimapLocalPos.Y, Normalized.X, Normalized.Y, GeoNX, GeoNY, bSwapMinimapXY?1:0, bInvertMinimapX?1:0, bInvertMinimapY?1:0);
+                UE_LOG(LogCoding, Display, TEXT("ScreenPositionToWorld[Geo]: WorldCenter=(%.1f,%.1f) WorldBoundsHalf=(%.1f,%.1f) => World=(%.1f,%.1f,%.1f)"),
+                    WorldCenter.X, WorldCenter.Y, WorldBoundsHalfSize.X, WorldBoundsHalfSize.Y, CandidateWorldFromGeo.X, CandidateWorldFromGeo.Y, CandidateWorldFromGeo.Z);
+                // Round-trip verification: convert World back to Normalized and compare
+                FVector2D RoundTripNorm = WorldToMinimapNormalized(CandidateWorldFromGeo);
+                FVector2D NormDiff = Normalized - RoundTripNorm;
+                UE_LOG(LogCoding, Display, TEXT("ScreenPositionToWorld[RoundTrip]: ClickNorm=(%.3f,%.3f) RoundTripNorm=(%.3f,%.3f) DIFF=(%.4f,%.4f)"),
+                    Normalized.X, Normalized.Y, RoundTripNorm.X, RoundTripNorm.Y, NormDiff.X, NormDiff.Y);
+            }
+            
+            // Since we have a valid geometry mapping, just use it directly
+            OutWorldLocation = CandidateWorldFromGeo;
+            LastChosenCandidateTrace = TEXT("GeoLocal");
+            return true;
+        }
     }
-    else
+
+    // Fallback: compute using viewport only (if no cached local data)
+    if (!bHaveCachedLocal)
     {
-        // Fallback: compute using viewport only
-        TopLeft = GetMinimapTopLeftFromViewport();
+        FVector2D TopLeft = GetMinimapTopLeftFromViewport();
         MinimapLocalPos = ScreenPosition - TopLeft;
+        if (OutMinimapLocal) *OutMinimapLocal = MinimapLocalPos;
+        if (MinimapLocalPos.X < 0 || MinimapLocalPos.Y < 0 || MinimapLocalPos.X > MinimapSize.X || MinimapLocalPos.Y > MinimapSize.Y)
+        {
+            return false;
+        }
+        Normalized = FVector2D(MinimapLocalPos.X / MinimapSize.X, MinimapLocalPos.Y / MinimapSize.Y);
+        float NX = (Normalized.X - 0.5f);
+        float NY = (0.5f - Normalized.Y);
+        if (bSwapMinimapXY) { float Tmp = NX; NX = NY; NY = Tmp; }
+        if (bInvertMinimapX) NX = -NX;
+        if (bInvertMinimapY) NY = -NY;
+        OutWorldLocation.X = WorldCenter.X + NX * 2.0f * WorldBoundsHalfSize.X;
+        OutWorldLocation.Y = WorldCenter.Y + NY * 2.0f * WorldBoundsHalfSize.Y;
+        OutWorldLocation.Z = 0.0f;
+        LastChosenCandidateTrace = TEXT("ViewportFallback");
+        return true;
     }
-    if (OutMinimapLocal) *OutMinimapLocal = MinimapLocalPos;
-    if (MinimapLocalPos.X < 0 || MinimapLocalPos.Y < 0 || MinimapLocalPos.X > MinimapSize.X || MinimapLocalPos.Y > MinimapSize.Y)
-    {
-        return false;
-    }
-
-    FVector2D Normalized(MinimapLocalPos.X / MinimapSize.X, MinimapLocalPos.Y / MinimapSize.Y);
-    float NX = (Normalized.X - 0.5f);
-    float NY = (0.5f - Normalized.Y);
-
-    if (bSwapMinimapXY)
-    {
-        float Tmp = NX;
-        NX = NY;
-        NY = Tmp;
-    }
-    if (bInvertMinimapX) NX = -NX;
-    if (bInvertMinimapY) NY = -NY;
-
-    OutWorldLocation.X = WorldCenter.X + NX * 2.0f * WorldBoundsHalfSize.X;
-    OutWorldLocation.Y = WorldCenter.Y + NY * 2.0f * WorldBoundsHalfSize.Y;
-    OutWorldLocation.Z = 0.0f;
-    return true;
+    
+    // Should not reach here
+    return false;
 }
 
 bool UPlayerHUDWidget::IsScreenPositionOverMinimap(const FVector2D& ScreenPosition) const
 {
-    FVector2D TopLeftAbs, SizeAbs;
-    GetMinimapScreenRect(TopLeftAbs, SizeAbs);
-    FVector2D MRMax = TopLeftAbs + SizeAbs;
-    bool bInside = (ScreenPosition.X >= TopLeftAbs.X && ScreenPosition.Y >= TopLeftAbs.Y && ScreenPosition.X <= MRMax.X && ScreenPosition.Y <= MRMax.Y);
-    UE_LOG(LogCoding, Verbose, TEXT("IsScreenPositionOverMinimap: AbsTopLeft=(%.1f,%.1f) AbsSize=(%.1f,%.1f) Screen=(%.1f,%.1f) IsInside=%d"), TopLeftAbs.X, TopLeftAbs.Y, SizeAbs.X, SizeAbs.Y, ScreenPosition.X, ScreenPosition.Y, bInside ? 1 : 0);
+    // Use cached LOCAL rect and geometry to avoid DPI scaling mismatches
+    FVector2D TopLeftLocal = CachedMinimapTopLeftLocal;
+    FVector2D SizeLocal = CachedMinimapSizeLocal;
+    
+    // If not yet painted, use fallback (still need to convert screen to local somehow)
+    if (SizeLocal.IsNearlyZero())
+    {
+        // Fallback: use viewport-based calculation (may have DPI issues)
+        FVector2D TopLeftAbs = GetMinimapTopLeftFromViewport();
+        FVector2D SizeAbs = MinimapSize;
+        FVector2D Center = TopLeftAbs + SizeAbs * 0.5f;
+        Center += ClickableAreaOffset;
+        FVector2D Half = FVector2D(SizeAbs.X * 0.5f * ClickableAreaScale, SizeAbs.Y * 0.5f * ClickableAreaScaleY);
+        Half += ClickableAreaPadding * 0.5f;
+        FVector2D AdjustedTopLeft = Center - Half;
+        FVector2D AdjustedSize = Half * 2.0f;
+        FVector2D MRMax = AdjustedTopLeft + AdjustedSize;
+        bool bInside = (ScreenPosition.X >= AdjustedTopLeft.X && ScreenPosition.Y >= AdjustedTopLeft.Y && ScreenPosition.X <= MRMax.X && ScreenPosition.Y <= MRMax.Y);
+        UE_LOG(LogCoding, Verbose, TEXT("IsScreenPositionOverMinimap(fallback): Screen=(%.1f,%.1f) Rect=(%.1f,%.1f)-(%.1f,%.1f) Inside=%d"), 
+            ScreenPosition.X, ScreenPosition.Y, AdjustedTopLeft.X, AdjustedTopLeft.Y, MRMax.X, MRMax.Y, bInside ? 1 : 0);
+        return bInside;
+    }
+    
+    // Convert screen position to local coordinates using cached geometry
+    FVector2D LocalPos = CachedPaintGeometry.AbsoluteToLocal(ScreenPosition);
+    
+    // Apply tuning in LOCAL space (scale/padding/offset are in local units now)
+    FVector2D CenterLocal = TopLeftLocal + SizeLocal * 0.5f;
+    CenterLocal += ClickableAreaOffset; // offset is now in local units
+    // Apply asymmetric scaling for clickable area: X uses ClickableAreaScale, Y uses ClickableAreaScaleY
+    FVector2D HalfLocal = FVector2D(SizeLocal.X * 0.5f * ClickableAreaScale, SizeLocal.Y * 0.5f * ClickableAreaScaleY);
+    HalfLocal += ClickableAreaPadding * 0.5f; // padding is now in local units
+    FVector2D AdjustedTopLeftLocal = CenterLocal - HalfLocal;
+    FVector2D AdjustedSizeLocal = HalfLocal * 2.0f;
+    FVector2D AdjustedBRLocal = AdjustedTopLeftLocal + AdjustedSizeLocal;
+    
+    bool bInside = (LocalPos.X >= AdjustedTopLeftLocal.X && LocalPos.Y >= AdjustedTopLeftLocal.Y && 
+                    LocalPos.X <= AdjustedBRLocal.X && LocalPos.Y <= AdjustedBRLocal.Y);
+    UE_LOG(LogCoding, Verbose, TEXT("IsScreenPositionOverMinimap: Screen=(%.1f,%.1f) Local=(%.1f,%.1f) MinimapLocal=(%.1f,%.1f) Size=(%.1f,%.1f) AdjTL=(%.1f,%.1f) AdjSize=(%.1f,%.1f) Inside=%d"), 
+        ScreenPosition.X, ScreenPosition.Y, LocalPos.X, LocalPos.Y, TopLeftLocal.X, TopLeftLocal.Y, SizeLocal.X, SizeLocal.Y,
+        AdjustedTopLeftLocal.X, AdjustedTopLeftLocal.Y, AdjustedSizeLocal.X, AdjustedSizeLocal.Y, bInside ? 1 : 0);
     return bInside;
 }
 
@@ -380,32 +546,32 @@ void UPlayerHUDWidget::GetMinimapScreenRect(FVector2D& OutTopLeft, FVector2D& Ou
 
 bool UPlayerHUDWidget::HandleMinimapClick(const FVector2D& ScreenPosition, bool bIsRightClick, bool bCtrlHeld, bool bAltHeld)
 {
-    const FGeometry& Geo = GetCachedGeometry();
-    // We can still handle clicks with cached absolute rect even if Geo is invalid
-    if (Geo.GetLocalSize().IsNearlyZero())
+    // Use cached LOCAL rect (updated every paint frame) for hit testing
+    FVector2D CachedTLLocal = CachedMinimapTopLeftLocal;
+    FVector2D CachedSizeLocal = CachedMinimapSizeLocal;
+    if (CachedSizeLocal.IsNearlyZero())
     {
-        FVector2D CachedTL = CachedMinimapTopLeftAbs;
-        FVector2D CachedSize = CachedMinimapSizeAbs;
-        if (CachedSize.IsNearlyZero())
-        {
-            return false;
-        }
-        FVector2D MRMax = CachedTL + CachedSize;
-        bool bInside = (ScreenPosition.X >= CachedTL.X && ScreenPosition.Y >= CachedTL.Y && ScreenPosition.X <= MRMax.X && ScreenPosition.Y <= MRMax.Y);
-        if (!bInside) return false;
-        // Convert screen position to world using viewport approach
-        FVector WorldHit;
-        ScreenPositionToWorld(Geo, ScreenPosition, WorldHit, nullptr);
-        // Continue with processing below
-        UE_LOG(LogCoding, Display, TEXT("HandleMinimapClick(fallback): Screen=(%.1f,%.1f) World=%s Inside=%d"), ScreenPosition.X, ScreenPosition.Y, *WorldHit.ToString(), bInside ? 1 : 0);
+        UE_LOG(LogCoding, Warning, TEXT("HandleMinimapClick: CachedMinimapSize is zero - minimap not yet painted"));
+        return false;
     }
     
-    // Convert screen position to world location
+    // Convert screen position to world location using cached geometry
+    const FGeometry& Geo = CachedPaintGeometry; // Use geometry from last paint for accurate mapping
     FVector WorldHit;
     FVector2D MinimapLocalPos;
     bool bInsideMap = ScreenPositionToWorld(Geo, ScreenPosition, WorldHit, &MinimapLocalPos);
-    UE_LOG(LogCoding, Display, TEXT("HandleMinimapClick: GeoSize=(%.1f,%.1f) TopLeft=(%.1f,%.1f) Screen=(%.1f,%.1f) MinimapLocal=(%.1f,%.1f) Inside=%d"),
-        Geo.GetLocalSize().X, Geo.GetLocalSize().Y, GetMinimapTopLeftLocal(Geo).X, GetMinimapTopLeftLocal(Geo).Y, ScreenPosition.X, ScreenPosition.Y, MinimapLocalPos.X, MinimapLocalPos.Y, bInsideMap ? 1 : 0);
+    
+    // Compute adjusted LOCAL rect for debug logs
+    FVector2D CenterLocal = CachedTLLocal + CachedSizeLocal * 0.5f;
+    CenterLocal += ClickableAreaOffset;
+    FVector2D HalfLocal = FVector2D(CachedSizeLocal.X * 0.5f * ClickableAreaScale, CachedSizeLocal.Y * 0.5f * ClickableAreaScaleY);
+    HalfLocal += ClickableAreaPadding * 0.5f;
+    FVector2D AdjustedTLLocal = CenterLocal - HalfLocal;
+    FVector2D AdjustedSizeLocal = HalfLocal * 2.0f;
+    FVector2D LocalPos = Geo.AbsoluteToLocal(ScreenPosition);
+    UE_LOG(LogCoding, Display, TEXT("HandleMinimapClick: CachedTLLocal=(%.1f,%.1f) CachedSizeLocal=(%.1f,%.1f) AdjustedTLLocal=(%.1f,%.1f) AdjustedSizeLocal=(%.1f,%.1f) ScaleX=%.3f ScaleY=%.3f Pad=(%.1f,%.1f) Offset=(%.1f,%.1f) Screen=(%.1f,%.1f) LocalPos=(%.1f,%.1f) MinimapLocal=(%.1f,%.1f) Inside=%d"),
+        CachedTLLocal.X, CachedTLLocal.Y, CachedSizeLocal.X, CachedSizeLocal.Y, AdjustedTLLocal.X, AdjustedTLLocal.Y, AdjustedSizeLocal.X, AdjustedSizeLocal.Y, ClickableAreaScale, ClickableAreaScaleY, ClickableAreaPadding.X, ClickableAreaPadding.Y, ClickableAreaOffset.X, ClickableAreaOffset.Y, ScreenPosition.X, ScreenPosition.Y, LocalPos.X, LocalPos.Y, MinimapLocalPos.X, MinimapLocalPos.Y, bInsideMap ? 1 : 0);
+    UE_LOG(LogCoding, Verbose, TEXT("HandleMinimapClick: Flags -> Swap=%d InvertX=%d InvertY=%d"), bSwapMinimapXY?1:0, bInvertMinimapX?1:0, bInvertMinimapY?1:0);
     
     if (!bInsideMap)
     {
@@ -474,11 +640,28 @@ bool UPlayerHUDWidget::HandleMinimapClick(const FVector2D& ScreenPosition, bool 
         LastClickScreenPos = ScreenPosition;
         LastClickWorld = WorldHit;
         FVector2D Normalized = WorldToMinimapNormalized(WorldHit);
-        // Get absolute top-left
-        FVector2D TopLeftAbs = CachedMinimapTopLeftAbs;
-        FVector2D SizeAbs = CachedMinimapSizeAbs;
-        LastReprojectedScreenPos = TopLeftAbs + FVector2D(Normalized.X * SizeAbs.X, Normalized.Y * SizeAbs.Y);
+        // Also compute normalized from the original screen position (for comparison)
+        FVector2D NormalizedFromScreen = FVector2D::ZeroVector;
+        if (!AdjustedSizeLocal.IsNearlyZero())
+        {
+            NormalizedFromScreen = FVector2D((LocalPos.X - AdjustedTLLocal.X) / AdjustedSizeLocal.X, (LocalPos.Y - AdjustedTLLocal.Y) / AdjustedSizeLocal.Y);
+        }
+        // Convert reprojection to absolute for visualization
+        FVector2D ReprojLocal = AdjustedTLLocal + FVector2D(Normalized.X * AdjustedSizeLocal.X, Normalized.Y * AdjustedSizeLocal.Y);
+        LastReprojectedScreenPos = Geo.LocalToAbsolute(ReprojLocal);
         LastClickTime = FPlatformTime::Seconds();
+        // Extra verbose logs for diagnostic purposes
+        UE_LOG(LogCoding, Display, TEXT("Minimap click debug: Screen=(%.1f,%.1f) Local=(%.1f,%.1f) ReprojLocal=(%.1f,%.1f) ReprojAbs=(%.1f,%.1f)"),
+            ScreenPosition.X, ScreenPosition.Y, LocalPos.X, LocalPos.Y, ReprojLocal.X, ReprojLocal.Y, LastReprojectedScreenPos.X, LastReprojectedScreenPos.Y);
+        UE_LOG(LogCoding, Verbose, TEXT("Minimap world mapping: WorldCenter=(%.1f,%.1f) WorldBoundsHalfSize=(%.3f,%.3f) WorldNorm=(%.3f,%.3f)"),
+            WorldCenter.X, WorldCenter.Y, WorldBoundsHalfSize.X, WorldBoundsHalfSize.Y, Normalized.X, Normalized.Y);
+        UE_LOG(LogCoding, Verbose, TEXT("    ScreenNorm=(%.3f,%.3f) WorldNorm=(%.3f,%.3f) Diff=(%.3f,%.3f)"),
+            NormalizedFromScreen.X, NormalizedFromScreen.Y, Normalized.X, Normalized.Y, NormalizedFromScreen.X - Normalized.X, NormalizedFromScreen.Y - Normalized.Y);
+        // Log scale comparison between local and absolute sizes
+        float ScaleX = CachedMinimapSizeAbs.X / MinimapSize.X;
+        float ScaleY = CachedMinimapSizeAbs.Y / MinimapSize.Y;
+        UE_LOG(LogCoding, Verbose, TEXT("Minimap sizes: MinimapSize(local)=(%.1f,%.1f) CachedSizeAbs=(%.1f,%.1f) DPI_Scale=(%.3f,%.3f)"),
+            MinimapSize.X, MinimapSize.Y, CachedMinimapSizeAbs.X, CachedMinimapSizeAbs.Y, ScaleX, ScaleY);
     }
     return true;
 }
@@ -491,6 +674,78 @@ void UPlayerHUDWidget::SetMinimapPath(const TArray<FVector>& PathPoints)
 void UPlayerHUDWidget::AddDestructionMark(const FVector& WorldLocation)
 {
     DestructionMarks.Add(WorldLocation);
+}
+
+void UPlayerHUDWidget::IncrementClickableAreaPadding(float Multiplier /*= 1.0f*/)
+{
+    float Step = ClickableAreaPaddingStep * Multiplier;
+    ClickableAreaPadding.X += Step;
+    ClickableAreaPadding.Y += Step;
+    UE_LOG(LogCoding, Display, TEXT("PlayerHUDWidget: IncrementClickableAreaPadding -> new Padding=(%.1f,%.1f) Step=%.1f"), ClickableAreaPadding.X, ClickableAreaPadding.Y, Step);
+}
+
+void UPlayerHUDWidget::IncrementClickableAreaOffset(float Dx /*= 0.0f*/, float Dy /*= 0.0f*/, float Multiplier /*= 1.0f*/)
+{
+    float StepX = Dx != 0.0f ? Dx * Multiplier : ClickableAreaOffsetStep * Multiplier;
+    float StepY = Dy != 0.0f ? Dy * Multiplier : ClickableAreaOffsetStep * Multiplier;
+    ClickableAreaOffset.X += StepX;
+    ClickableAreaOffset.Y += StepY;
+    UE_LOG(LogCoding, Display, TEXT("PlayerHUDWidget: IncrementClickableAreaOffset -> new Offset=(%.1f,%.1f) Step=(%.1f,%.1f)"), ClickableAreaOffset.X, ClickableAreaOffset.Y, StepX, StepY);
+}
+
+void UPlayerHUDWidget::IncrementClickableAreaScale(float Multiplier /*= 1.0f*/)
+{
+    float Step = ClickableAreaScaleStep * Multiplier;
+    ClickableAreaScale += Step;
+    // Ensure scale stays reasonable
+    ClickableAreaScale = FMath::Max(0.01f, ClickableAreaScale);
+    UE_LOG(LogCoding, Display, TEXT("PlayerHUDWidget: IncrementClickableAreaScale -> new Scale=%.3f Step=%.3f"), ClickableAreaScale, Step);
+}
+
+
+void UPlayerHUDWidget::SetMinimapForceMappingMode(EMinimapForceMappingMode Mode)
+{
+    MinimapForceMappingMode = Mode;
+    const TCHAR* S = TEXT("Auto");
+    if (Mode == EMinimapForceMappingMode::ForceGeo) S = TEXT("ForceGeo");
+    if (Mode == EMinimapForceMappingMode::ForceCached) S = TEXT("ForceCached");
+    UE_LOG(LogCoding, Log, TEXT("PlayerHUDWidget: Minimap ForceMappingMode set to %s"), S);
+}
+
+void UPlayerHUDWidget::CycleMinimapForceMappingMode()
+{
+    uint8 Cur = static_cast<uint8>(MinimapForceMappingMode);
+    Cur = (Cur + 1) % 3;
+    SetMinimapForceMappingMode(static_cast<EMinimapForceMappingMode>(Cur));
+}
+
+void UPlayerHUDWidget::ToggleMinimapDebugOverlay()
+{
+    bShowMinimapDebugOverlay = !bShowMinimapDebugOverlay;
+    UE_LOG(LogCoding, Log, TEXT("PlayerHUDWidget: ToggleMinimapDebugOverlay -> %d"), bShowMinimapDebugOverlay?1:0);
+}
+
+void UPlayerHUDWidget::PrintMinimapDiagnostics() const
+{
+    FVector2D TopLeftAbs = CachedMinimapTopLeftAbs;
+    FVector2D SizeAbs = CachedMinimapSizeAbs;
+    float ScaleX = (MinimapSize.X != 0.0f) ? (SizeAbs.X / MinimapSize.X) : 0.0f;
+    float ScaleY = (MinimapSize.Y != 0.0f) ? (SizeAbs.Y / MinimapSize.Y) : 0.0f;
+    FVector2D CenterNorm = WorldToMinimapNormalized(FVector(WorldCenter.X, WorldCenter.Y, 0.0f));
+    FVector2D CenterPixelAbs = TopLeftAbs + FVector2D(CenterNorm.X * SizeAbs.X, CenterNorm.Y * SizeAbs.Y);
+    UE_LOG(LogCoding, Log, TEXT("PlayerHUDWidget: Minimap Diagnostics: Mode=%s Swap=%d InvX=%d InvY=%d TopLeftAbs=(%.1f,%.1f) SizeAbs=(%.1f,%.1f) Scale=(%.3f,%.3f) WorldCenter=(%.1f,%.1f) WorldBoundsHalf=(%.1f,%.1f) CenterPx=(%.1f,%.1f) LastChosen=%s LastClickDiff=(%.1f,%.1f)"),
+        MinimapForceMappingMode == EMinimapForceMappingMode::ForceGeo ? TEXT("ForceGeo") : MinimapForceMappingMode == EMinimapForceMappingMode::ForceCached ? TEXT("ForceCached") : TEXT("Auto"),
+        bSwapMinimapXY?1:0, bInvertMinimapX?1:0, bInvertMinimapY?1:0,
+        TopLeftAbs.X, TopLeftAbs.Y, SizeAbs.X, SizeAbs.Y, ScaleX, ScaleY,
+        WorldCenter.X, WorldCenter.Y, WorldBoundsHalfSize.X, WorldBoundsHalfSize.Y,
+        CenterPixelAbs.X, CenterPixelAbs.Y, *LastChosenCandidateTrace, LastClickScreenPos.X - LastReprojectedScreenPos.X, LastClickScreenPos.Y - LastReprojectedScreenPos.Y);
+}
+
+void UPlayerHUDWidget::ApplyLastClickOffsetToClickableArea(float Multiplier /*= 1.0f*/)
+{
+    FVector2D Delta = LastClickScreenPos - LastReprojectedScreenPos;
+    ClickableAreaOffset += Delta * Multiplier;
+    UE_LOG(LogCoding, Log, TEXT("PlayerHUDWidget: ApplyLastClickOffsetToClickableArea -> Delta=(%.1f,%.1f) NewOffset=(%.1f,%.1f) Mult=%.3f"), Delta.X, Delta.Y, ClickableAreaOffset.X, ClickableAreaOffset.Y, Multiplier);
 }
 
 void UPlayerHUDWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
@@ -573,7 +828,15 @@ void UPlayerHUDWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime
                 LastSeenTimes.Add(Owner, GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0);
                 if (bEnableMinimapLogging && bMinimapVerboseLogging)
                 {
-                    UE_LOG(LogCoding, Log, TEXT("PlayerHUDWidget: Visible enemy %s Team=%d Position=(%.1f,%.1f,%.1f) -> updating LastKnown"), *Owner->GetName(), OwnerTeamID, ActorLoc.X, ActorLoc.Y, ActorLoc.Z);
+                    double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+                    double* LastLogPtr = LastVerboseEnemyLogTime.Find(Owner);
+                    double LastLog = LastLogPtr ? *LastLogPtr : -1.0;
+                    // Only log once every 2 seconds per actor to avoid spam
+                    if (LastLog < 0.0 || (Now - LastLog) >= 2.0)
+                    {
+                        UE_LOG(LogCoding, Log, TEXT("PlayerHUDWidget: Visible enemy %s Team=%d Position=(%.1f,%.1f,%.1f) -> updating LastKnown"), *Owner->GetName(), OwnerTeamID, ActorLoc.X, ActorLoc.Y, ActorLoc.Z);
+                        LastVerboseEnemyLogTime.Add(Owner, Now);
+                    }
                 }
             }
             else if (bShowExploredAsGhost && bExplored)
@@ -1137,37 +1400,90 @@ int32 UPlayerHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& All
         RetLayer += 1;
     }
 
-    // Update cached absolute rect (so hit tests use exactly the same rect we draw)
+    // Cache geometry and absolute rect (so hit tests use exactly the same rect we draw)
+    CachedPaintGeometry = AllottedGeometry;
     CachedMinimapTopLeftAbs = AllottedGeometry.LocalToAbsolute(MinimapTopLeft);
     CachedMinimapSizeAbs = AllottedGeometry.LocalToAbsolute(MinimapTopLeft + Size) - CachedMinimapTopLeftAbs;
+    // Cache LOCAL coordinates for reliable hit-testing (avoids DPI scaling issues)
+    CachedMinimapTopLeftLocal = MinimapTopLeft;
+    CachedMinimapSizeLocal = Size;
+    
+    // Log cached rect and tunables for debugging click offset issues
+    if (bShowMinimapDebugLabels)
+    {
+        UE_LOG(LogCoding, Display, TEXT("NativePaint: MinimapTopLeft(local)=(%.1f,%.1f) MinimapSize=(%.1f,%.1f)"), MinimapTopLeft.X, MinimapTopLeft.Y, Size.X, Size.Y);
+        UE_LOG(LogCoding, Display, TEXT("NativePaint: CachedMinimapTopLeftAbs=(%.1f,%.1f) CachedMinimapSizeAbs=(%.1f,%.1f)"), CachedMinimapTopLeftAbs.X, CachedMinimapTopLeftAbs.Y, CachedMinimapSizeAbs.X, CachedMinimapSizeAbs.Y);
+        UE_LOG(LogCoding, Display, TEXT("NativePaint: ClickableAreaScale=%.3f Padding=(%.1f,%.1f) Offset=(%.1f,%.1f)"), ClickableAreaScale, ClickableAreaPadding.X, ClickableAreaPadding.Y, ClickableAreaOffset.X, ClickableAreaOffset.Y);
 
-    // Debug: draw clickable area overlay if requested (use cached absolute rect to ensure it matches)
+        
+    }
+
+    // Compute the adjusted clickable rect in LOCAL coordinates (same logic as IsScreenPositionOverMinimap).
+    // This ensures the overlay matches exactly what the hit-testing uses.
+    FVector2D PaintAdjCenterLocal = MinimapTopLeft + Size * 0.5f;
+    PaintAdjCenterLocal += ClickableAreaOffset; // tunables are in local units
+    // Allow asymmetric scaling for X/Y: width uses ClickableAreaScale, height uses ClickableAreaScaleY
+    FVector2D PaintAdjHalfLocal = FVector2D(Size.X * 0.5f * ClickableAreaScale, Size.Y * 0.5f * ClickableAreaScaleY);
+    PaintAdjHalfLocal += ClickableAreaPadding * 0.5f;
+    FVector2D PaintAdjTopLeftLocal = PaintAdjCenterLocal - PaintAdjHalfLocal;
+    FVector2D PaintAdjSizeLocal = PaintAdjHalfLocal * 2.0f;
+    FVector2D PaintAdjBRLocal = PaintAdjTopLeftLocal + PaintAdjSizeLocal;
+
+    // Debug: also draw a visual cross at the mapped world center to verify alignment
+    if (bShowMinimapDebugLabels)
+    {
+        FVector2D CenterNorm = WorldToMinimapNormalized(FVector(WorldCenter.X, WorldCenter.Y, 0.0f));
+        FVector2D CenterPixel = PaintAdjTopLeftLocal + FVector2D(CenterNorm.X * PaintAdjSizeLocal.X, CenterNorm.Y * PaintAdjSizeLocal.Y);
+        const float CrossHalf = 6.0f;
+        TArray<FVector2f> CrossPoints;
+        CrossPoints.Add(FVector2f(CenterPixel.X - CrossHalf, CenterPixel.Y));
+        CrossPoints.Add(FVector2f(CenterPixel.X + CrossHalf, CenterPixel.Y));
+        CrossPoints.Add(FVector2f(CenterPixel.X, CenterPixel.Y - CrossHalf));
+        CrossPoints.Add(FVector2f(CenterPixel.X, CenterPixel.Y + CrossHalf));
+        FPaintGeometry FullGeom2 = AllottedGeometry.ToPaintGeometry(FVector2D::ZeroVector, AllottedGeometry.GetLocalSize());
+        FSlateDrawElement::MakeLines(
+            OutDrawElements,
+            RetLayer + 103,
+            FullGeom2,
+            CrossPoints,
+            ESlateDrawEffect::None,
+            FLinearColor::Yellow,
+            true,
+            1.6f
+        );
+    }
+
+    // Debug: draw clickable area overlay if requested
+    // This now draws the ADJUSTED clickable rect (with Scale/Padding/Offset applied) so you can see the actual clickable zone
     if (bShowClickableAreaDebug)
     {
+        // Computed PaintAdjTopLeftAbs / PaintAdjSizeAbs earlier and converted to local coordinates (PaintAdjTopLeftLocal/PaintAdjSizeLocal)
+        
+        // AdjustedTopLeftLocal / AdjustedBRLocal / AdjustedSizeLocal were computed earlier
+        
         // Use a semi-transparent color and an outline to make the clickable area visible
         const FLinearColor FillColor(0.0f, 0.5f, 1.0f, 0.15f);
         const FLinearColor BorderColor(0.0f, 0.5f, 1.0f, 0.85f);
 
-        // Draw filled rectangle
+        // Draw filled rectangle for the adjusted clickable area
         FSlateBrush FillBrush;
         FillBrush.TintColor = FSlateColor(FillColor);
         FillBrush.DrawAs = ESlateBrushDrawType::Box;
-        FillBrush.ImageSize = Size;
+        FillBrush.ImageSize = PaintAdjSizeLocal;
 
-        // Draw filled rectangle using paint geometry (same as before)
+        FPaintGeometry AdjustedPaintGeom = AllottedGeometry.ToPaintGeometry(PaintAdjSizeLocal, FSlateLayoutTransform(PaintAdjTopLeftLocal));
         FSlateDrawElement::MakeBox(
             OutDrawElements,
             RetLayer + 100,
-            MinimapPaintGeom,
+            AdjustedPaintGeom,
             &FillBrush,
             ESlateDrawEffect::None,
             FillColor
         );
 
-        // Border: thin lines around the rectangle
-        // Build border points in local coordinates for the FullGeom paint
-        FVector2D LocalTL = MinimapTopLeft;
-        FVector2D LocalBR = LocalTL + Size;
+        // Border: thin lines around the adjusted rectangle
+        FVector2D LocalTL = PaintAdjTopLeftLocal;
+        FVector2D LocalBR = PaintAdjBRLocal;
         TArray<FVector2f> BorderPoints;
         BorderPoints.Add(FVector2f(LocalTL.X, LocalTL.Y));
         BorderPoints.Add(FVector2f(LocalBR.X, LocalTL.Y));
@@ -1187,7 +1503,27 @@ int32 UPlayerHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& All
             true,
             2.0f
         );
-        RetLayer += 2;
+        
+        // Also draw the original minimap rect in a different color (green) so you can compare
+        const FLinearColor OriginalBorderColor(0.0f, 1.0f, 0.0f, 0.6f);
+        TArray<FVector2f> OrigBorderPoints;
+        OrigBorderPoints.Add(FVector2f(MinimapTopLeft.X, MinimapTopLeft.Y));
+        OrigBorderPoints.Add(FVector2f(MinimapTopLeft.X + Size.X, MinimapTopLeft.Y));
+        OrigBorderPoints.Add(FVector2f(MinimapTopLeft.X + Size.X, MinimapTopLeft.Y + Size.Y));
+        OrigBorderPoints.Add(FVector2f(MinimapTopLeft.X, MinimapTopLeft.Y + Size.Y));
+        OrigBorderPoints.Add(FVector2f(MinimapTopLeft.X, MinimapTopLeft.Y));
+        FSlateDrawElement::MakeLines(
+            OutDrawElements,
+            RetLayer + 102,
+            FullGeom,
+            OrigBorderPoints,
+            ESlateDrawEffect::None,
+            OriginalBorderColor,
+            true,
+            1.5f
+        );
+        
+        RetLayer += 3;
     }
 
     // Debug: draw last click and reprojected point & connecting line
@@ -1222,6 +1558,8 @@ int32 UPlayerHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& All
     // Debug: force-draw helpers (temporary)
     const int32 DebugLayerOffset = 1000; // draw well above normal UI for visibility while debugging
     const bool bForceDebugDraw = (bShowMinimapDebugOutline || bShowMinimapDebugLabels);
+
+    // Debug overlay will be drawn later after the FontInfo is established
 
     // ===== Draw FOW Overlay on Minimap (Texture-based smooth) =====
     // Prefer drawing a supplied fog texture (or render target) for best smoothness; otherwise fall back to grid blending
@@ -1264,7 +1602,7 @@ int32 UPlayerHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& All
                 Tint.A = FogOverlayTextureOpacity;
 
                 // Calculate transformed UVs to match minimap coordinate system
-                // The fog texture uses world coordinates directly, but minimap may have:
+                    // Use AdjustedTopLeftAbs/AdjustedSizeAbs computed earlier in NativePaint
                 // - bSwapMinimapXY: swap U and V
                 // - bInvertMinimapX: flip U
                 // - bInvertMinimapY: flip V
@@ -1513,7 +1851,8 @@ AfterFOWOverlay:
         if (!WeakPing.IsValid()) continue;
         AMapPing* Ping = WeakPing.Get();
         FVector2D Norm = WorldToMinimapNormalized(Ping->PingLocation);
-        FVector2D PixelPos = FVector2D(Norm.X * Size.X, Norm.Y * Size.Y);
+        // Map normalized coordinates into adjusted clickable area coordinates (so drawn pings match click mapping)
+        FVector2D PixelPos = (PaintAdjTopLeftLocal - MinimapTopLeft) + FVector2D(Norm.X * PaintAdjSizeLocal.X, Norm.Y * PaintAdjSizeLocal.Y);
         // Clamp PixelPos to minimap bounds to avoid accidental off-by-one outside drawing area
         bool bOutOfBounds = false;
         if (PixelPos.X < 0.0f || PixelPos.Y < 0.0f || PixelPos.X > Size.X || PixelPos.Y > Size.Y)
@@ -1575,7 +1914,7 @@ AfterFOWOverlay:
         for (const FVector& WP : NavPathPoints)
         {
             FVector2D Norm = WorldToMinimapNormalized(WP);
-            Points.Add(FVector2D(Norm.X * Size.X, Norm.Y * Size.Y));
+            Points.Add((PaintAdjTopLeftLocal - MinimapTopLeft) + FVector2D(Norm.X * PaintAdjSizeLocal.X, Norm.Y * PaintAdjSizeLocal.Y));
         }
 
         // Draw polyline
@@ -1612,7 +1951,7 @@ AfterFOWOverlay:
         }
 
         FVector2D Norm = Icon.Normalized;
-        FVector2D PixelPos = FVector2D(Norm.X * Size.X, Norm.Y * Size.Y);
+        FVector2D PixelPos = (PaintAdjTopLeftLocal - MinimapTopLeft) + FVector2D(Norm.X * PaintAdjSizeLocal.X, Norm.Y * PaintAdjSizeLocal.Y);
         float S = Icon.Size;
 
         // Draw based on IconType
@@ -1847,6 +2186,34 @@ AfterFOWOverlay:
     // Debug: draw small numeric labels next to first few icons to help verify mapping
     const int32 MaxLabels = 8;
     FSlateFontInfo FontInfo = FCoreStyle::Get().GetFontStyle(TEXT("NormalFont"));
+
+    // Draw a compact overlay next to the minimap to show runtime debug settings
+    if (bShowMinimapDebugOverlay)
+    {
+        FString ModeStr;
+        switch (MinimapForceMappingMode)
+        {
+        case EMinimapForceMappingMode::ForceGeo: ModeStr = TEXT("ForceGeo"); break;
+        case EMinimapForceMappingMode::ForceCached: ModeStr = TEXT("ForceCached"); break;
+        default: ModeStr = TEXT("Auto"); break;
+        }
+        FVector2D TopLeftForText = MinimapTopLeft + FVector2D(Size.X + 8.0f, 0.0f);
+        float ScaleX = (Size.X != 0.0f) ? (CachedMinimapSizeAbs.X / Size.X) : 0.0f;
+        float ScaleY = (Size.Y != 0.0f) ? (CachedMinimapSizeAbs.Y / Size.Y) : 0.0f;
+        FVector2D CenterNorm = WorldToMinimapNormalized(FVector(WorldCenter.X, WorldCenter.Y, 0.0f));
+        FVector2D CenterPixelAbs = CachedMinimapTopLeftAbs + FVector2D(CenterNorm.X * CachedMinimapSizeAbs.X, CenterNorm.Y * CachedMinimapSizeAbs.Y);
+        FString Overlay = FString::Printf(TEXT("Minimap: Mode=%s Swap=%d InvX=%d InvY=%d\nCachedTL=(%.1f,%.1f) Size=(%.1f,%.1f) Scale=(%.3f,%.3f)\nWorldCenter=(%.1f,%.1f) WorldBoundsHalf=(%.1f,%.1f) CenterPx=(%.1f,%.1f)\nLastChosen=%s\nLastClickDiff=(%.1f,%.1f)"), *ModeStr, bSwapMinimapXY?1:0, bInvertMinimapX?1:0, bInvertMinimapY?1:0, CachedMinimapTopLeftAbs.X, CachedMinimapTopLeftAbs.Y, CachedMinimapSizeAbs.X, CachedMinimapSizeAbs.Y, ScaleX, ScaleY, WorldCenter.X, WorldCenter.Y, WorldBoundsHalfSize.X, WorldBoundsHalfSize.Y, CenterPixelAbs.X, CenterPixelAbs.Y, *LastChosenCandidateTrace, LastClickScreenPos.X - LastReprojectedScreenPos.X, LastClickScreenPos.Y - LastReprojectedScreenPos.Y);
+        FSlateDrawElement::MakeText(
+            OutDrawElements,
+            RetLayer + 200,
+            AllottedGeometry.ToPaintGeometry(TopLeftForText, FVector2D(350.0f, 200.0f)),
+            FText::FromString(Overlay),
+            FontInfo,
+            ESlateDrawEffect::None,
+            FLinearColor::White
+        );
+        RetLayer += 1;
+    }
     int32 LabelCount = FMath::Min(CachedIcons.Num(), MaxLabels);
     if (bShowMinimapDebugLabels)
     {
@@ -1854,7 +2221,7 @@ AfterFOWOverlay:
     {
         const FMinimapIcon& Icon = CachedIcons[i];
         FVector2D Norm = Icon.Normalized;
-        FVector2D PixelPos = FVector2D(Norm.X * Size.X, Norm.Y * Size.Y);
+        FVector2D PixelPos = (PaintAdjTopLeftLocal - MinimapTopLeft) + FVector2D(Norm.X * PaintAdjSizeLocal.X, Norm.Y * PaintAdjSizeLocal.Y);
 
         FString Label;
         if (Icon.OwnerActor.IsValid())
@@ -2020,42 +2387,40 @@ void UPlayerHUDWidget::ShowPingWheelAtWorldLocation(const FVector& WorldLocation
     // Force layout calculation before positioning
     PingWheelInstance->ForceLayoutPrepass();
 
-    // Compute screen pos from cursor position (GetMousePosition returns screen pixels, compatible with SetPositionInViewport)
-    FVector2D WheelScreenPos = FVector2D::ZeroVector;
+    // Get widget desired size
+    FVector2D DesiredSize = PingWheelInstance->GetDesiredSize();
+    
+    // Get current mouse position in VIEWPORT coordinates
+    FVector2D ViewportPos = FVector2D::ZeroVector;
     if (APlayerController* PC = GetOwningPlayer())
     {
         float MouseX = 0.f, MouseY = 0.f;
         PC->GetMousePosition(MouseX, MouseY);
-        WheelScreenPos = FVector2D(MouseX, MouseY);
+        ViewportPos = FVector2D(MouseX, MouseY);
         
-        // Fallback if mouse pos is invalid
-        if (WheelScreenPos.IsNearlyZero())
+        // Fallback if mouse pos is invalid - project world location to screen
+        if (ViewportPos.IsNearlyZero())
         {
             FVector2D Projected;
             if (PC->ProjectWorldLocationToScreen(WorldLocation, Projected, true))
             {
-                WheelScreenPos = Projected;
+                // ProjectWorldLocationToScreen returns screen pixels
+                // Convert to viewport coords by dividing by DPI scale
+                float ViewportScale = UWidgetLayoutLibrary::GetViewportScale(this);
+                if (ViewportScale <= 0.0f) ViewportScale = 1.0f;
+                ViewportPos = Projected / ViewportScale;
             }
         }
     }
 
-    UE_LOG(LogCoding, Verbose, TEXT("ShowPingWheelAtWorldLocation: WheelScreenPos=(%.1f,%.1f) World=%s"), WheelScreenPos.X, WheelScreenPos.Y, *WorldLocation.ToString());
+    // Calculate top-left position to center the widget on the cursor
+    FVector2D TopLeftPos = ViewportPos - (DesiredSize * 0.5f);
+    
+    UE_LOG(LogCoding, Warning, TEXT("ShowPingWheelAtWorldLocation: ViewportPos=(%.1f,%.1f) DesiredSize=(%.1f,%.1f) TopLeftPos=(%.1f,%.1f) World=%s"), 
+        ViewportPos.X, ViewportPos.Y, DesiredSize.X, DesiredSize.Y, TopLeftPos.X, TopLeftPos.Y, *WorldLocation.ToString());
 
-    // Try to compute the widget size and place the ping wheel centered on the click location
-    FVector2D DesiredSize = PingWheelInstance->GetDesiredSize();
-    if (DesiredSize.IsNearlyZero())
-    {
-        // Widget hasn't calculated layout yet - fallback to centered alignment
-        PingWheelInstance->SetAlignmentInViewport(FVector2D(0.5f, 0.5f));
-        PingWheelInstance->SetPositionInViewport(WheelScreenPos, false);
-    }
-    else
-    {
-        // Position so the ping wheel is centered on WheelScreenPos
-        FVector2D TopLeft = WheelScreenPos - (DesiredSize * 0.5f);
-        PingWheelInstance->SetAlignmentInViewport(FVector2D(0.0f, 0.0f));
-        PingWheelInstance->SetPositionInViewport(TopLeft, false);
-    }
+    // SetPositionInViewport with bRemoveDPIScale=false uses viewport coords directly
+    PingWheelInstance->SetPositionInViewport(TopLeftPos, false);
 }
 
 void UPlayerHUDWidget::ShowPingWheelAtScreenLocation(const FVector2D& ScreenLocation, const FVector& WorldLocation)
@@ -2090,21 +2455,47 @@ void UPlayerHUDWidget::ShowPingWheelAtScreenLocation(const FVector2D& ScreenLoca
     // Force layout to calculate desired size now
     PingWheelInstance->ForceLayoutPrepass();
 
+    // Get widget desired size (this is in DPI-independent design units)
     FVector2D DesiredSize = PingWheelInstance->GetDesiredSize();
-    FVector2D WheelScreenPos = ScreenLocation;
-    UE_LOG(LogCoding, Verbose, TEXT("ShowPingWheelAtScreenLocation: ScreenLocation=(%.1f,%.1f) DesiredSize=(%.1f,%.1f)"), WheelScreenPos.X, WheelScreenPos.Y, DesiredSize.X, DesiredSize.Y);
+    
+    // Get current mouse position directly from player controller
+    // GetMousePosition returns coordinates in VIEWPORT space (already DPI-scaled)
+    FVector2D MouseViewportPos = FVector2D::ZeroVector;
+    if (APlayerController* PC = GetOwningPlayer())
+    {
+        float MX, MY;
+        if (PC->GetMousePosition(MX, MY))
+        {
+            MouseViewportPos = FVector2D(MX, MY);
+        }
+    }
+    
+    // Get viewport scale for debugging
+    float ViewportScale = UWidgetLayoutLibrary::GetViewportScale(this);
+    if (ViewportScale <= 0.0f) ViewportScale = 1.0f;
+    
+    // Calculate top-left position to center the widget on cursor
+    FVector2D TopLeftPos = MouseViewportPos - (DesiredSize * 0.5f);
+    
+    // DEBUG: Draw on-screen markers to visualize the positioning
+    if (GEngine)
+    {
+        GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Yellow, 
+            FString::Printf(TEXT("MousePos=(%.0f,%.0f) DesiredSize=(%.0f,%.0f) TopLeft=(%.0f,%.0f) Scale=%.3f"), 
+            MouseViewportPos.X, MouseViewportPos.Y, DesiredSize.X, DesiredSize.Y, TopLeftPos.X, TopLeftPos.Y, ViewportScale));
+    }
+    
+    UE_LOG(LogCoding, Warning, TEXT("ShowPingWheelAtScreenLocation: MouseViewportPos=(%.1f,%.1f) DesiredSize=(%.1f,%.1f) TopLeftPos=(%.1f,%.1f) ViewportScale=%.3f"), 
+        MouseViewportPos.X, MouseViewportPos.Y, DesiredSize.X, DesiredSize.Y, TopLeftPos.X, TopLeftPos.Y, ViewportScale);
 
-    if (DesiredSize.IsNearlyZero())
-    {
-        PingWheelInstance->SetAlignmentInViewport(FVector2D(0.5f, 0.5f));
-        PingWheelInstance->SetPositionInViewport(WheelScreenPos, false);
-    }
-    else
-    {
-        FVector2D TopLeft = WheelScreenPos - (DesiredSize * 0.5f);
-        PingWheelInstance->SetAlignmentInViewport(FVector2D(0.0f, 0.0f));
-        PingWheelInstance->SetPositionInViewport(TopLeft, false);
-    }
+    // DIAGNOSTIC: Store debug position for visual overlay
+    LastPingWheelDebugPos = MouseViewportPos;
+    bShowPingWheelDebug = true;
+
+    // SetPositionInViewport sets the position AND forces anchors to (0,0) - top-left
+    // So we must calculate the top-left corner ourselves
+    // bRemoveDPIScale=false means "use these coordinates as-is" (viewport coords)
+    PingWheelInstance->SetPositionInViewport(TopLeftPos, false);
 }
 
 void UPlayerHUDWidget::RequestPurchase(AShopActor* Shop, UItemData* Item)

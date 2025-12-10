@@ -210,6 +210,20 @@ private:
 	// Input handler: open nearest shop
 	void OnOpenShopPressed();
 
+	// Debug: increment clickable area padding and offset via keyboard
+	void OnIncreaseClickablePaddingPressed();
+	void OnDecreaseClickablePaddingPressed();
+	void OnIncreaseClickableOffsetPressed();
+	void OnDecreaseClickableScalePressed();
+	// Toggle minimap debug overlay on-screen
+	void OnToggleMinimapDebugOverlay();
+	// Print minimap diagnostics
+	void OnPrintMinimapDiagnostics();
+	// Apply the last click reprojection delta to the HUD clickable offset (calibration)
+	void OnApplyLastClickOffset();
+	// Cycle force mapping mode for minimap (Auto/Geo/Cached)
+	void OnCycleMinimapForceMapping();
+
 	// Finds the closest shop to the controlled pawn, within ShopOpenRange, and opens it in the HUD
 	void OpenClosestShop();
 

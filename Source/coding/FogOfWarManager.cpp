@@ -806,12 +806,12 @@ void AFogOfWarManager::OnCanvasUpdate(UCanvas* Canvas, int32 Width, int32 Height
 			}
 		}
 		
-		UE_LOG(LogCoding, Warning, TEXT("=== FogOfWarManager OnCanvasUpdate ==="));
-		UE_LOG(LogCoding, Warning, TEXT("  Canvas: %dx%d, Grid: %dx%d, LocalClientGrid.Num=%d"),
+		UE_LOG(LogCoding, Verbose, TEXT("=== FogOfWarManager OnCanvasUpdate ==="));
+		UE_LOG(LogCoding, Verbose, TEXT("  Canvas: %dx%d, Grid: %dx%d, LocalClientGrid.Num=%d"),
 			Width, Height, GridSizeX, GridSizeY, LocalClientGrid.Num());
-		UE_LOG(LogCoding, Warning, TEXT("  FogStates: Hidden=%d, Explored=%d, Visible=%d"),
+		UE_LOG(LogCoding, Verbose, TEXT("  FogStates: Hidden=%d, Explored=%d, Visible=%d"),
 			hiddenCount, exploredCount, visibleCount);
-		UE_LOG(LogCoding, Warning, TEXT("  LocalPlayerTeamID=%d, bDebugForceFill=%d"),
+		UE_LOG(LogCoding, Verbose, TEXT("  LocalPlayerTeamID=%d, bDebugForceFill=%d"),
 			LocalPlayerTeamID, bDebugForceFill);
 	}
 	
@@ -827,7 +827,7 @@ void AFogOfWarManager::OnCanvasUpdate(UCanvas* Canvas, int32 Width, int32 Height
 		FVector2D DebugPos(Width * 0.25f, Height * 0.25f);
 		FVector2D DebugSize(Width * 0.5f, Height * 0.5f);
 		Canvas->K2_DrawBox(DebugPos, DebugSize, 0.f, FLinearColor::White);
-		UE_LOG(LogCoding, Log, TEXT("FogOfWarManager: OnCanvasUpdate debug fill drawn (bDebugForceFill=1)"));
+		UE_LOG(LogCoding, Verbose, TEXT("FogOfWarManager: OnCanvasUpdate debug fill drawn (bDebugForceFill=1)"));
 		// Still allow normal drawing after debug fill; do not early return
 	}
 

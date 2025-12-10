@@ -1,3 +1,13 @@
+#pragma once
+
+UENUM(BlueprintType)
+enum class EMinimapForceMappingMode : uint8
+{
+    Auto UMETA(DisplayName = "Auto"),
+    ForceGeo UMETA(DisplayName = "ForceGeo"),
+    ForceCached UMETA(DisplayName = "ForceCached"),
+};
+
 // Simple C++ UserWidget to display player stats and integrated minimap.
 #pragma once
 
@@ -187,6 +197,18 @@ public:
     // If true, swap X<->Y mapping between world and minimap (useful when diagonals appear mirrored)
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap")
     bool bSwapMinimapXY = true;
+    // Auto-detect whether world X and Y axes are swapped on the minimap texture
+    // (some minimaps have rotated coordinate spaces). Enables detection in NativeConstruct.
+    bool bAutoDetectMinimapSwap = true;
+
+    // Force mapping mode for diagnostics/fix: Auto select best candidate, ForceGeo (use geometry mapping), ForceCached (use cached mapping)
+    // Debug: Allow forcing a mapping mode for testing
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
+    EMinimapForceMappingMode MinimapForceMappingMode = EMinimapForceMappingMode::Auto;
+
+    // On-screen overlay to display runtime minimap debug info
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
+    bool bShowMinimapDebugOverlay = true;
 
     // Debug: show clickable minimap overlay in NativePaint
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
@@ -196,6 +218,55 @@ public:
     bool bShowClickableClickDebug = true;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
     float ClickDebugDisplaySeconds = 3.0f;
+    
+    // Debug: PingWheel positioning
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
+    bool bShowPingWheelDebug = false;
+    FVector2D LastPingWheelDebugPos = FVector2D::ZeroVector;
+
+    // Debug / tuning: scale applied to clickable minimap rect (1.0 == exact size, >1 expands clickable area, <1 shrinks)
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
+        float ClickableAreaScale = 1.0f;
+        // Extra control to scale only the height of the clickable area (preserves width)
+        UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|ClickArea", meta = (ClampMin = "0.25", ClampMax = "4.0"))
+        float ClickableAreaScaleY = 1.0f;
+    // Debug / tuning: padding (pixels) added to clickable minimap rect as absolute offset
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
+    FVector2D ClickableAreaPadding = FVector2D(0.0f, 0.0f);
+    // Debug / tuning: offset (in screen px) applied to the clickable center (useful for calibrating alignments)
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
+    FVector2D ClickableAreaOffset = FVector2D(0.0f, 0.0f);
+    // Hotkey step sizes for in-editor calibration
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
+    float ClickableAreaPaddingStep = 5.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
+    float ClickableAreaOffsetStep = 5.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
+    float ClickableAreaScaleStep = 0.05f;
+
+    // Increment the padding by a step. Multiplier allows larger increments if needed.
+    UFUNCTION(BlueprintCallable, Category = "Minimap|Debug")
+    void IncrementClickableAreaPadding(float Multiplier = 1.0f);
+    // Increment the offset by a step in X and/or Y.
+    UFUNCTION(BlueprintCallable, Category = "Minimap|Debug")
+    void IncrementClickableAreaOffset(float Dx = 0.0f, float Dy = 0.0f, float Multiplier = 1.0f);
+    // Increment clickable area scale (rate applied is ClickableAreaScaleStep)
+    UFUNCTION(BlueprintCallable, Category = "Minimap|Debug")
+    void IncrementClickableAreaScale(float Multiplier = 1.0f);
+
+    // Force mapping mode helpers
+    UFUNCTION(BlueprintCallable, Category = "Minimap|Debug")
+    void SetMinimapForceMappingMode(EMinimapForceMappingMode Mode);
+
+    UFUNCTION(BlueprintCallable, Category = "Minimap|Debug")
+    void CycleMinimapForceMappingMode();
+    UFUNCTION(BlueprintCallable, Category = "Minimap|Debug")
+    void ToggleMinimapDebugOverlay();
+    UFUNCTION(BlueprintCallable, Category = "Minimap|Debug")
+    void PrintMinimapDiagnostics() const;
+    // Apply the last measured click reprojection delta to the ClickableAreaOffset (quick calibration)
+    UFUNCTION(BlueprintCallable, Category = "Minimap|Debug")
+    void ApplyLastClickOffsetToClickableArea(float Multiplier = 1.0f);
 
     // Ping wheel UI class (optional) - set this to a UMG widget blueprint that shows ping options
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap")
@@ -204,6 +275,9 @@ public:
     // Runtime instance of the ping wheel
     UPROPERTY(Transient)
     UUserWidget* PingWheelInstance;
+
+    // Cache the last paint geometry so we can reliably convert screen->local coords
+    mutable FGeometry CachedPaintGeometry;
 
     // Item slots - 6 images for inventory display
     UPROPERTY(meta = (BindWidgetOptional))
@@ -251,14 +325,19 @@ public:
 
     // Minimap logging controls (to avoid spamming the log every tick)
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
-    bool bEnableMinimapLogging = true; // Enabled for FOW/minimap diagnostics
+    // Keep minimap logging disabled by default to avoid spamming log output during normal testing
+    bool bEnableMinimapLogging = false; // Enabled for FOW/minimap diagnostics
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
-    bool bMinimapVerboseLogging = true; // Very verbose per-icon logging
+    bool bMinimapVerboseLogging = false; // Very verbose per-icon logging
 
     // Minimum seconds between successive minimap icon debug prints (when enabled)
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
     float MinimapLogInterval = 1.0f;
+
+    // Reprojection error threshold (squared pixels) used to decide whether to attempt fallback candidate
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
+    float MinimapReprojErrorThreshold = 64.0f;
 
 protected:
     virtual void NativeConstruct() override;
@@ -284,6 +363,9 @@ private:
 
     UFUNCTION()
     void OnSummoner2Clicked();
+
+    // Limits minimap verbose enemy logs: per-actor last log time to avoid spamming
+    TMap<TWeakObjectPtr<AActor>, double> LastVerboseEnemyLogTime;
 
     // ===== Minimap Internal Data =====
     // Cached pings discovered each tick
@@ -489,11 +571,16 @@ public:
         // Cached screen-space minimap rect computed during NativePaint
         mutable FVector2D CachedMinimapTopLeftAbs = FVector2D::ZeroVector;
         mutable FVector2D CachedMinimapSizeAbs = FVector2D::ZeroVector;
+        // Cached LOCAL minimap rect (for consistent hit-testing using geometry transforms)
+        mutable FVector2D CachedMinimapTopLeftLocal = FVector2D::ZeroVector;
+        mutable FVector2D CachedMinimapSizeLocal = FVector2D::ZeroVector;
         // debug: last click visuals
         mutable FVector2D LastClickScreenPos = FVector2D::ZeroVector;
         mutable FVector2D LastReprojectedScreenPos = FVector2D::ZeroVector;
         // Use existing LastClickWorld declared above; do not duplicate
         mutable double LastClickTime = 0.0;
+        // Last chosen candidate info for debugging
+        mutable FString LastChosenCandidateTrace;
     UFUNCTION(BlueprintCallable, Category = "Minimap|Helpers")
     FVector2D GetMinimapSize() const { return MinimapSize; }
     UFUNCTION(BlueprintCallable, Category = "Minimap|Helpers")
