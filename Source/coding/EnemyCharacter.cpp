@@ -14,6 +14,10 @@
 #include "EngineUtils.h"
 #include "Logging.h"
 #include "MOBACharacter.h"
+#include "Engine/World.h"
+#include "Engine/EngineTypes.h"
+#include "WorldCollision.h"
+#include "Engine/OverlapResult.h"
 
 AEnemyCharacter::AEnemyCharacter()
 {
@@ -67,6 +71,8 @@ AEnemyCharacter::AEnemyCharacter()
 	if (GetCharacterMovement())
 	{
 		GetCharacterMovement()->MaxWalkSpeed = MoveSpeed;
+		// Enable RVO avoidance to reduce stacking between minions
+		GetCharacterMovement()->bUseRVOAvoidance = true;
 	}
 
 	// Create a VisionSource so minions/turrets can grant vision
@@ -251,6 +257,48 @@ void AEnemyCharacter::Tick(float DeltaTime)
 		{
 			UE_LOG(LogCoding, Error, TEXT("Minion %s: No waypoint and no target!"), *GetName());
 			bLoggedNoWaypoint = true;
+		}
+	}
+
+	// Simple separation steering to avoid minions stacking
+	// Compute a small repulsion vector from nearby friendly minions and apply as movement input
+	const float SeparationRadius = 120.0f;
+	FVector SeparationVec = FVector::ZeroVector;
+	int32 SeparationCount = 0;
+
+	TArray<FOverlapResult> Overlaps;
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(MinionSeparation), false, this);
+	if (GetWorld()->OverlapMultiByObjectType(Overlaps, GetActorLocation(), FQuat::Identity,
+		FCollisionObjectQueryParams(FCollisionObjectQueryParams::AllDynamicObjects), FCollisionShape::MakeSphere(SeparationRadius), Params))
+	{
+		for (const FOverlapResult& R : Overlaps)
+		{
+			AActor* Other = R.GetActor();
+			if (Other && Other != this && Other->IsA<AEnemyCharacter>())
+			{
+				// Only separate from same-team minions
+				UHealthComponent* OtherHealth = Other->FindComponentByClass<UHealthComponent>();
+				if (OtherHealth && HealthComponent && OtherHealth->TeamID == HealthComponent->TeamID)
+				{
+					float Dist = FVector::Dist(GetActorLocation(), Other->GetActorLocation());
+					if (Dist > KINDA_SMALL_NUMBER)
+					{
+						float Strength = FMath::Clamp((SeparationRadius - Dist) / SeparationRadius, 0.0f, 1.0f);
+						SeparationVec += (GetActorLocation() - Other->GetActorLocation()).GetSafeNormal() * Strength;
+						++SeparationCount;
+					}
+				}
+			}
+		}
+	}
+
+	if (SeparationCount > 0)
+	{
+		FVector Repel = SeparationVec / SeparationCount;
+		Repel.Z = 0.0f;
+		if (!Repel.IsNearlyZero())
+		{
+			AddMovementInput(Repel.GetSafeNormal(), 0.6f); // small steering influence
 		}
 	}
 }

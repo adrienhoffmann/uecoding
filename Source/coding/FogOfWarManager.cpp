@@ -14,6 +14,14 @@
 #include "Kismet/GameplayStatics.h"
 #include "Logging.h"
 
+// Console toggle to reduce verbose FogOfWar logs in normal play. Set `coding.Fog.DebugLogs 1` to enable detailed logs.
+static int32 GCodingFogDebugLogs = 0;
+FAutoConsoleVariableRef CVarCodingFogDebugLogs(TEXT("coding.Fog.DebugLogs"), GCodingFogDebugLogs, TEXT("Enable FogOfWar debug logs (0=off, 1=on)"), ECVF_Default);
+
+// Ignore minion/turret/nexus collision during LOS tracing when non-zero
+static int32 GCodingFogIgnoreUnitCollision = 1;
+FAutoConsoleVariableRef CVarCodingFogIgnoreUnitCollision(TEXT("coding.Fog.IgnoreUnitCollision"), GCodingFogIgnoreUnitCollision, TEXT("If non-zero, Fog LOS ignores minion/turret/nexus collision in traces (default=1)"), ECVF_Default);
+
 TWeakObjectPtr<AFogOfWarManager> AFogOfWarManager::Instance = nullptr;
 
 AFogOfWarManager::AFogOfWarManager()
@@ -314,9 +322,17 @@ void AFogOfWarManager::ServerUpdateVision()
 				}
 			}
 		}
-		UE_LOG(LogCoding, Log, TEXT("FogOfWarManager: ServerUpdateVision - VisionSources.Num=%d, Applied=%d (Team0=%d, Team1=%d)"),
-			VisionSources.Num(), AppliedCount, Team0Count, Team1Count);
-	}
+        if (GCodingFogDebugLogs)
+        {
+            UE_LOG(LogCoding, Log, TEXT("FogOfWarManager: ServerUpdateVision - VisionSources.Num=%d, Applied=%d (Team0=%d, Team1=%d)"),
+                VisionSources.Num(), AppliedCount, Team0Count, Team1Count);
+        }
+        else
+        {
+            UE_LOG(LogCoding, Verbose, TEXT("FogOfWarManager: ServerUpdateVision - VisionSources.Num=%d, Applied=%d (Team0=%d, Team1=%d)"),
+                VisionSources.Num(), AppliedCount, Team0Count, Team1Count);
+        }
+    }
 	
 	// Step 3: Compress and replicate to clients
 	for (int32 TeamID = 0; TeamID < NumTeams; ++TeamID)
@@ -345,10 +361,18 @@ void AFogOfWarManager::ServerUpdateVision()
 			else if (s == EFogState::Explored) ++explored;
 			else ++hidden;
 		}
-		UE_LOG(LogCoding, Log, TEXT("FogOfWarManager (Server): Team %d -> Visible=%d Explored=%d Hidden=%d CompressedBytes=%d Version=%u"),
-			TeamID, visible, explored, hidden, ReplicatedTeamFogData[TeamID].CompressedGrid.Num(), ReplicatedTeamFogData[TeamID].Version);
+		if (GCodingFogDebugLogs)
+		{
+			UE_LOG(LogCoding, Log, TEXT("FogOfWarManager (Server): Team %d -> Visible=%d Explored=%d Hidden=%d CompressedBytes=%d Version=%u"),
+				TeamID, visible, explored, hidden, ReplicatedTeamFogData[TeamID].CompressedGrid.Num(), ReplicatedTeamFogData[TeamID].Version);
+		}
+		else
+		{
+			UE_LOG(LogCoding, Verbose, TEXT("FogOfWarManager (Server): Team %d -> Visible=%d Explored=%d Hidden=%d CompressedBytes=%d Version=%u"),
+				TeamID, visible, explored, hidden, ReplicatedTeamFogData[TeamID].CompressedGrid.Num(), ReplicatedTeamFogData[TeamID].Version);
+		}
 	}
-	
+
 	// Force net update to replicate changes (for dedicated server -> clients)
 	ForceNetUpdate();
 
@@ -360,7 +384,14 @@ void AFogOfWarManager::ServerUpdateVision()
 		if (LocalPlayerTeamID >= 0 && LocalPlayerTeamID < TeamGrids.Num())
 		{
 			LocalClientGrid = TeamGrids[LocalPlayerTeamID];
-			UE_LOG(LogCoding, Log, TEXT("FogOfWarManager (Standalone/ListenServer): Updated LocalClientGrid for Team %d directly"), LocalPlayerTeamID);
+			if (GCodingFogDebugLogs)
+			{
+				UE_LOG(LogCoding, Log, TEXT("FogOfWarManager (Standalone/ListenServer): Updated LocalClientGrid for Team %d directly"), LocalPlayerTeamID);
+			}
+			else
+			{
+				UE_LOG(LogCoding, Verbose, TEXT("FogOfWarManager (Standalone/ListenServer): Updated LocalClientGrid for Team %d directly"), LocalPlayerTeamID);
+			}
 		}
 	}
 }
@@ -394,8 +425,16 @@ void AFogOfWarManager::ApplyVisionSource(UVisionSourceComponent* Source)
 	static int32 ApplyLogCounter = 0;
 	if (++ApplyLogCounter % 60 == 1)
 	{
-		UE_LOG(LogCoding, Log, TEXT("ApplyVisionSource: %s Team=%d Radius=%.0f Pos=(%.0f,%.0f,%.0f)"),
-			*Source->GetOwner()->GetName(), TeamID, Radius, WorldPos.X, WorldPos.Y, WorldPos.Z);
+		if (GCodingFogDebugLogs)
+		{
+			UE_LOG(LogCoding, Log, TEXT("ApplyVisionSource: %s Team=%d Radius=%.0f Pos=(%.0f,%.0f,%.0f)"),
+				*Source->GetOwner()->GetName(), TeamID, Radius, WorldPos.X, WorldPos.Y, WorldPos.Z);
+		}
+		else
+		{
+			UE_LOG(LogCoding, Verbose, TEXT("ApplyVisionSource: %s Team=%d Radius=%.0f Pos=(%.0f,%.0f,%.0f)"),
+				*Source->GetOwner()->GetName(), TeamID, Radius, WorldPos.X, WorldPos.Y, WorldPos.Z);
+		}
 	}
 
 	// Perform LOS tracing for occlusion (this is authoritative; use TraceStride to reduce cost)
@@ -457,7 +496,31 @@ void AFogOfWarManager::ApplyVisionSource(UVisionSourceComponent* Source)
 			bool bHit = GetWorld()->LineTraceSingleByChannel(Hit, TraceStartBase, TraceEnd, ECC_Visibility, Params);
 
 			++TotalTraced;
-			if (!bHit)
+			// If we hit something, allow configurable exclusions (minions/turrets/nexus)
+			bool bEffectiveHit = bHit;
+			if (bHit && GCodingFogIgnoreUnitCollision)
+			{
+				AActor* HitActor = Hit.GetActor();
+				if (HitActor)
+				{
+					FString ClassName = HitActor->GetClass() ? HitActor->GetClass()->GetName() : FString();
+					FString ActorName = HitActor->GetName();
+					ClassName = ClassName.ToLower();
+					ActorName = ActorName.ToLower();
+					if (ClassName.Contains(TEXT("minion")) || ClassName.Contains(TEXT("turret")) || ClassName.Contains(TEXT("nexus")) ||
+						ActorName.Contains(TEXT("minion")) || ActorName.Contains(TEXT("turret")) || ActorName.Contains(TEXT("nexus")))
+					{
+						// Treat this as not blocking for Fog LOS
+						bEffectiveHit = false;
+						if (bDebugLOS)
+						{
+							UE_LOG(LogCoding, VeryVerbose, TEXT("Fog LOS: ignoring hit on actor %s (class=%s) at cell (%d,%d) due to IgnoreUnitCollision"), *HitActor->GetName(), *HitActor->GetClass()->GetName(), X, Y);
+						}
+					}
+				}
+			}
+
+			if (!bEffectiveHit)
 			{
 				Grid[Index] = EFogState::Visible;
 				++TotalMarkedVisible;
@@ -485,8 +548,16 @@ void AFogOfWarManager::ApplyVisionSource(UVisionSourceComponent* Source)
 	static int32 LOSSummaryCounter = 0;
 	if (++LOSSummaryCounter % 60 == 1)
 	{
-		UE_LOG(LogCoding, Log, TEXT("Fog LOS SourceSummary: Owner=%s Team=%d Radius=%.0f Traced=%d Blocked=%d MarkedVisible=%d Stride=%d"),
-			*Source->GetOwner()->GetName(), TeamID, Radius, TotalTraced, TotalBlocked, TotalMarkedVisible, TraceStride);
+		if (GCodingFogDebugLogs)
+		{
+			UE_LOG(LogCoding, Log, TEXT("Fog LOS SourceSummary: Owner=%s Team=%d Radius=%.0f Traced=%d Blocked=%d MarkedVisible=%d Stride=%d"),
+				*Source->GetOwner()->GetName(), TeamID, Radius, TotalTraced, TotalBlocked, TotalMarkedVisible, TraceStride);
+		}
+		else
+		{
+			UE_LOG(LogCoding, VeryVerbose, TEXT("Fog LOS SourceSummary: Owner=%s Team=%d Radius=%.0f Traced=%d Blocked=%d MarkedVisible=%d Stride=%d"),
+				*Source->GetOwner()->GetName(), TeamID, Radius, TotalTraced, TotalBlocked, TotalMarkedVisible, TraceStride);
+		}
 	}
 }
 
@@ -781,6 +852,7 @@ void AFogOfWarManager::UpdateFogRenderTarget()
 	}
 }
 
+
 // Static counter to throttle OnCanvasUpdate logs
 static int32 CanvasUpdateLogCounter = 0;
 
@@ -882,5 +954,12 @@ void AFogOfWarManager::OnCanvasUpdate(UCanvas* Canvas, int32 Width, int32 Height
 	// Summary log: count non-hidden cells drawn
 	int32 drawn = 0;
 	for (EFogState s : LocalClientGrid) if (s != EFogState::Hidden) ++drawn;
-	UE_LOG(LogCoding, Log, TEXT("FogOfWarManager: OnCanvasUpdate completed, drawn cells=%d"), drawn);
+	if (GCodingFogDebugLogs)
+	{
+		UE_LOG(LogCoding, Log, TEXT("FogOfWarManager: OnCanvasUpdate completed, drawn cells=%d"), drawn);
+	}
+	else
+	{
+		UE_LOG(LogCoding, Verbose, TEXT("FogOfWarManager: OnCanvasUpdate completed, drawn cells=%d"), drawn);
+	}
 }

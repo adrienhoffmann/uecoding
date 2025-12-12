@@ -213,6 +213,16 @@ public:
     // Debug: show clickable minimap overlay in NativePaint
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
     bool bShowClickableAreaDebug = true;
+    // Debug: show adjusted absolute clickable rect (magenta) and enable diagnostics
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
+    bool bShowAdjustedAbsRectDebug = false;
+
+    // Console toggles / diagnostics
+    UFUNCTION(exec)
+    void ToggleAdjustedAbsRectDebug();
+
+    UFUNCTION(exec)
+    void PrintAdjustedRectDiagnostics() const;
     // Debug: show click reprojection points and connect them (disabled - uses obsolete absolute coords)
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
     bool bShowClickableClickDebug = false;
@@ -565,6 +575,10 @@ public:
     // Check if a screen position is over the minimap area (uses Slate absolute coordinates)
     UFUNCTION(BlueprintCallable, Category = "Minimap|Helpers")
     bool IsScreenPositionOverMinimap(const FVector2D& ScreenPosition) const;
+
+    // Check if a SCREEN (absolute) position is over the adjusted clickable area (computed in NativePaint)
+    UFUNCTION(BlueprintCallable, Category = "Minimap|Helpers")
+    bool IsScreenPositionOverAdjustedClickableRect(const FVector2D& ScreenPosition) const;
     
     // Check if viewport coordinates are over the minimap area (more robust - uses fresh geometry)
     // ViewportPosition: mouse position from GetMousePosition() (0 to ViewportSize)
@@ -591,6 +605,9 @@ public:
         // Cached screen-space minimap rect computed during NativePaint
         mutable FVector2D CachedMinimapTopLeftAbs = FVector2D::ZeroVector;
         mutable FVector2D CachedMinimapSizeAbs = FVector2D::ZeroVector;
+        // Adjusted clickable area in absolute screen coords (computed during NativePaint)
+        mutable FVector2D CachedAdjustedTopLeftAbs = FVector2D::ZeroVector;
+        mutable FVector2D CachedAdjustedSizeAbs = FVector2D::ZeroVector;
         // Cached LOCAL minimap rect (for consistent hit-testing using geometry transforms)
         mutable FVector2D CachedMinimapTopLeftLocal = FVector2D::ZeroVector;
         mutable FVector2D CachedMinimapSizeLocal = FVector2D::ZeroVector;

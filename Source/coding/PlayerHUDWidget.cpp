@@ -369,6 +369,12 @@ bool UPlayerHUDWidget::ScreenPositionToWorld(const FGeometry& Geometry, const FV
         if (MinimapLocalPos.X < 0 || MinimapLocalPos.Y < 0 || MinimapLocalPos.X > AdjustedSizeLocal.X || MinimapLocalPos.Y > AdjustedSizeLocal.Y)
         {
             // Not inside minimap
+            // If debug mode is enabled, log the adjusted abs rect and where the screen pos landed
+            if (bShowAdjustedAbsRectDebug)
+            {
+                FVector2D CursorAbs = Geometry.LocalToAbsolute(Geometry.AbsoluteToLocal(ScreenPosition));
+                UE_LOG(LogCoding, Display, TEXT("ScreenPositionToWorld: Click outside adjusted clickable area LocalPos=(%.1f,%.1f) AdjTL=(%.1f,%.1f) AdjSize=(%.1f,%.1f) CursorAbs=(%.1f,%.1f) CachedAdjTL=(%.1f,%.1f) CachedAdjSize=(%.1f,%.1f)"), LocalPos.X, LocalPos.Y, AdjustedTopLeftLocal.X, AdjustedTopLeftLocal.Y, AdjustedSizeLocal.X, AdjustedSizeLocal.Y, CursorAbs.X, CursorAbs.Y, CachedAdjustedTopLeftAbs.X, CachedAdjustedTopLeftAbs.Y, CachedAdjustedSizeAbs.X, CachedAdjustedSizeAbs.Y);
+            }
             return false;
         }
         else
@@ -475,6 +481,12 @@ bool UPlayerHUDWidget::ScreenPositionToWorld(const FGeometry& Geometry, const FV
         LastChosenCandidateTrace = TEXT("ViewportFallback");
         return true;
     }
+
+    // If debug-mode enabled, print a brief summary of the computed adjusted rects
+    if (bShowAdjustedAbsRectDebug)
+    {
+        UE_LOG(LogCoding, Display, TEXT("ScreenPositionToWorld Diagnostics: CachedAdjTL=(%.1f,%.1f) CachedAdjSize=(%.1f,%.1f) MinimapTL=(%.1f,%.1f) MinimapSize=(%.1f,%.1f)"), CachedAdjustedTopLeftAbs.X, CachedAdjustedTopLeftAbs.Y, CachedAdjustedSizeAbs.X, CachedAdjustedSizeAbs.Y, CachedMinimapTopLeftAbs.X, CachedMinimapTopLeftAbs.Y, CachedMinimapSizeAbs.X, CachedMinimapSizeAbs.Y);
+    }
     
     // Should not reach here
     return false;
@@ -524,6 +536,21 @@ bool UPlayerHUDWidget::IsScreenPositionOverMinimap(const FVector2D& ScreenPositi
         ScreenPosition.X, ScreenPosition.Y, LocalPos.X, LocalPos.Y, TopLeftLocal.X, TopLeftLocal.Y, SizeLocal.X, SizeLocal.Y,
         AdjustedTopLeftLocal.X, AdjustedTopLeftLocal.Y, AdjustedSizeLocal.X, AdjustedSizeLocal.Y, bInside ? 1 : 0);
     return bInside;
+}
+
+void UPlayerHUDWidget::ToggleAdjustedAbsRectDebug()
+{
+    bShowAdjustedAbsRectDebug = !bShowAdjustedAbsRectDebug;
+    UE_LOG(LogCoding, Display, TEXT("ToggleAdjustedAbsRectDebug -> %s"), bShowAdjustedAbsRectDebug ? TEXT("ON") : TEXT("OFF"));
+}
+
+void UPlayerHUDWidget::PrintAdjustedRectDiagnostics() const
+{
+    UE_LOG(LogCoding, Display, TEXT("AdjustedRect Diagnostics:"));
+    UE_LOG(LogCoding, Display, TEXT("  CachedAdjustedTopLeftAbs=(%.1f,%.1f) CachedAdjustedSizeAbs=(%.1f,%.1f)"), CachedAdjustedTopLeftAbs.X, CachedAdjustedTopLeftAbs.Y, CachedAdjustedSizeAbs.X, CachedAdjustedSizeAbs.Y);
+    UE_LOG(LogCoding, Display, TEXT("  CachedMinimapTopLeftAbs=(%.1f,%.1f) CachedMinimapSizeAbs=(%.1f,%.1f)"), CachedMinimapTopLeftAbs.X, CachedMinimapTopLeftAbs.Y, CachedMinimapSizeAbs.X, CachedMinimapSizeAbs.Y);
+    UE_LOG(LogCoding, Display, TEXT("  ClickableAreaScale=%.3f ClickableAreaScaleY=%.3f Padding=(%.1f,%.1f) Offset=(%.1f,%.1f)"), ClickableAreaScale, ClickableAreaScaleY, ClickableAreaPadding.X, ClickableAreaPadding.Y, ClickableAreaOffset.X, ClickableAreaOffset.Y);
+    UE_LOG(LogCoding, Display, TEXT("  LastClickScreenPos=(%.1f,%.1f) LastReprojectedScreenPos=(%.1f,%.1f)"), LastClickScreenPos.X, LastClickScreenPos.Y, LastReprojectedScreenPos.X, LastReprojectedScreenPos.Y);
 }
 
 bool UPlayerHUDWidget::IsViewportPositionOverMinimap(const FVector2D& ViewportPosition, const FVector2D& ViewportSize) const
@@ -725,7 +752,15 @@ bool UPlayerHUDWidget::HandleMinimapClickViewport(const FVector2D& ViewportPosit
         return true;
     }
     
-    // Normal left-click: do nothing (we only allow ping with Ctrl/Alt). Consume the click to prevent propagation.
+    // Normal left-click with camera unlocked: move camera to that location
+    if (bCameraUnlocked && MPC)
+    {
+        UE_LOG(LogCoding, Display, TEXT("HandleMinimapClickViewport: Left-click with camera unlocked -> moving camera to %s"), *WorldHit.ToString());
+        MPC->MoveCameraToWorldLocation(WorldHit);
+        return true;
+    }
+    
+    // Normal left-click with camera locked: do nothing. Consume the click to prevent propagation.
     return true;
 }
 
@@ -858,6 +893,19 @@ bool UPlayerHUDWidget::HandleMinimapClick(const FVector2D& ScreenPosition, bool 
             {
                 MPC->Server_RequestPing(WorldHit, EMapPingType::Ping_OnMyWay);
             }
+        }
+        else if (bCameraUnlocked && MPC)
+        {
+            UE_LOG(LogCoding, Display, TEXT("PlayerHUDWidget: Minimap left-click (cameraUnlocked=%d) -> MPC=%s; moving camera to %s"), bCameraUnlocked?1:0, MPC?*MPC->GetName():TEXT("NULL"), *WorldHit.ToString());
+            if (MPC)
+            {
+                MPC->MoveCameraToWorldLocation(WorldHit);
+            }
+            else
+            {
+                UE_LOG(LogCoding, Warning, TEXT("PlayerHUDWidget: MPC was null when attempting to move camera"));
+            }
+            return true;
         }
         // Debug: save last click and reprojected screen position for left-clicks too
         if (bShowClickableClickDebug && bIsRightClick)
@@ -1692,6 +1740,10 @@ int32 UPlayerHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& All
     FVector2D PaintAdjSizeLocal = PaintAdjHalfLocal * 2.0f;
     FVector2D PaintAdjBRLocal = PaintAdjTopLeftLocal + PaintAdjSizeLocal;
 
+    // Cache adjusted clickable area in ABSOLUTE screen coordinates so external callers (PlayerController) can test using screen cursor position
+    CachedAdjustedTopLeftAbs = AllottedGeometry.LocalToAbsolute(PaintAdjTopLeftLocal);
+    CachedAdjustedSizeAbs = AllottedGeometry.LocalToAbsolute(PaintAdjTopLeftLocal + PaintAdjSizeLocal) - CachedAdjustedTopLeftAbs;
+
     // Debug: also draw a visual cross at the mapped world center to verify alignment
     if (bShowMinimapDebugLabels)
     {
@@ -1799,6 +1851,33 @@ int32 UPlayerHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& All
 
         RetLayer += 4;
     }
+
+    // Debug: draw adjusted absolute clickable rect in MAGENTA if requested (converted to local coords for painting)
+    if (bShowAdjustedAbsRectDebug && !CachedAdjustedSizeAbs.IsNearlyZero())
+    {
+        FVector2D AdjTLLocal = AllottedGeometry.AbsoluteToLocal(CachedAdjustedTopLeftAbs);
+        FVector2D AdjSizeLocal = AllottedGeometry.AbsoluteToLocal(CachedAdjustedTopLeftAbs + CachedAdjustedSizeAbs) - AllottedGeometry.AbsoluteToLocal(CachedAdjustedTopLeftAbs);
+        const FLinearColor AbsFillColor(1.0f, 0.0f, 1.0f, 0.12f); // magenta translucent
+        const FLinearColor AbsBorderColor(1.0f, 0.0f, 1.0f, 0.9f);
+
+        FSlateBrush FillBrush2;
+        FillBrush2.TintColor = FSlateColor(AbsFillColor);
+        FillBrush2.DrawAs = ESlateBrushDrawType::Box;
+        FillBrush2.ImageSize = AdjSizeLocal;
+
+        FPaintGeometry AbsGeom = AllottedGeometry.ToPaintGeometry(AdjSizeLocal, FSlateLayoutTransform(AdjTLLocal));
+        FSlateDrawElement::MakeBox(OutDrawElements, RetLayer + 200, AbsGeom, &FillBrush2, ESlateDrawEffect::None, AbsFillColor);
+
+        TArray<FVector2f> BorderPoints2;
+        BorderPoints2.Add(FVector2f(AdjTLLocal.X, AdjTLLocal.Y));
+        BorderPoints2.Add(FVector2f(AdjTLLocal.X + AdjSizeLocal.X, AdjTLLocal.Y));
+        BorderPoints2.Add(FVector2f(AdjTLLocal.X + AdjSizeLocal.X, AdjTLLocal.Y + AdjSizeLocal.Y));
+        BorderPoints2.Add(FVector2f(AdjTLLocal.X, AdjTLLocal.Y + AdjSizeLocal.Y));
+        BorderPoints2.Add(FVector2f(AdjTLLocal.X, AdjTLLocal.Y));
+        FSlateDrawElement::MakeLines(OutDrawElements, RetLayer + 201, AllottedGeometry.ToPaintGeometry(FVector2D::ZeroVector, AllottedGeometry.GetLocalSize()), BorderPoints2, ESlateDrawEffect::None, AbsBorderColor, true, 2.2f);
+        RetLayer += 2;
+    }
+
 
     // Debug: draw last click and reprojected point & connecting line
     if (bShowClickableClickDebug && (FPlatformTime::Seconds() - LastClickTime) <= ClickDebugDisplaySeconds)
@@ -2619,6 +2698,23 @@ AfterFOWOverlay:
     return RetLayer;
 }
 
+// Helper: test absolute screen position against cached adjusted clickable rect (updated each NativePaint)
+bool UPlayerHUDWidget::IsScreenPositionOverAdjustedClickableRect(const FVector2D& ScreenPosition) const
+{
+    if (CachedAdjustedSizeAbs.IsNearlyZero())
+    {
+        return false;
+    }
+    const FVector2D& TL = CachedAdjustedTopLeftAbs;
+    const FVector2D BR = TL + CachedAdjustedSizeAbs;
+    const bool bInside = (ScreenPosition.X >= TL.X && ScreenPosition.Y >= TL.Y && ScreenPosition.X <= BR.X && ScreenPosition.Y <= BR.Y);
+    if (bShowAdjustedAbsRectDebug)
+    {
+        UE_LOG(LogCoding, Display, TEXT("IsScreenPositionOverAdjustedClickableRect: Screen=(%.1f,%.1f) TL=(%.1f,%.1f) BR=(%.1f,%.1f) Inside=%d"), ScreenPosition.X, ScreenPosition.Y, TL.X, TL.Y, BR.X, BR.Y, bInside?1:0);
+    }
+    return bInside;
+}
+
 void UPlayerHUDWidget::BindButtonHandlers()
 {
     if (SpellButton_Q)
@@ -2785,56 +2881,59 @@ void UPlayerHUDWidget::ShowPingWheelAtScreenLocation(const FVector2D& ScreenLoca
     // Get widget desired size
     FVector2D DesiredSize = PingWheelInstance->GetDesiredSize();
     
-    // FIX: Use ProjectWorldLocationToScreen to get the EXACT screen position 
-    // where the ping will appear - this uses the same coordinate system as the ping rendering
-    FVector2D ScreenPos = FVector2D::ZeroVector;
+    // SIMPLE FIX: Always use the mouse cursor position (viewport-relative) for the ping wheel UI.
+    // The WorldLocation is only used for spawning the ping, not for positioning the wheel.
+    // This avoids the issue where world locations outside the camera frustum project to invalid screen coords.
+    FVector2D CursorViewportPos = FVector2D::ZeroVector;
     APlayerController* PC = GetOwningPlayer();
     if (PC)
     {
-        // ProjectWorldLocationToScreen returns screen coordinates (absolute pixels)
-        FVector2D ProjectedScreen;
-        if (PC->ProjectWorldLocationToScreen(WorldLocation, ProjectedScreen, false))
+        float MX, MY;
+        if (PC->GetMousePosition(MX, MY))
         {
-            ScreenPos = ProjectedScreen;
-        }
-        else
-        {
-            // Fallback to mouse position if projection fails
-            float MX, MY;
-            if (PC->GetMousePosition(MX, MY))
-            {
-                ScreenPos = FVector2D(MX, MY);
-            }
+            CursorViewportPos = FVector2D(MX, MY);
         }
     }
     
+    // Fallback: if GetMousePosition failed, use the passed ScreenLocation
+    if (CursorViewportPos.IsNearlyZero())
+    {
+        CursorViewportPos = ScreenLocation;
+    }
+
     // Get viewport scale
     float ViewportScale = UWidgetLayoutLibrary::GetViewportScale(this);
     if (ViewportScale <= 0.0f) ViewportScale = 1.0f;
     
-    // ProjectWorldLocationToScreen returns absolute screen pixels
-    // SetPositionInViewport with bRemoveDPIScale=true will divide by ViewportScale internally
-    // So we pass absolute coords and let the engine convert
-    FVector2D TopLeftPos = ScreenPos - (DesiredSize * ViewportScale * 0.5f);
-    
-    // DEBUG: Draw on-screen markers to visualize the positioning
-    if (GEngine)
+    // Get viewport size for clamping
+    FVector2D ViewportSize(1920.0f, 1080.0f);
+    if (UGameViewportClient* ViewportClient = GetWorld()->GetGameViewport())
     {
-        GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Yellow, 
-            FString::Printf(TEXT("WorldLoc=%s ScreenPos=(%.0f,%.0f) DesiredSize=(%.0f,%.0f) TopLeft=(%.0f,%.0f) Scale=%.3f"), 
-            *WorldLocation.ToString(), ScreenPos.X, ScreenPos.Y, DesiredSize.X, DesiredSize.Y, TopLeftPos.X, TopLeftPos.Y, ViewportScale));
+        ViewportClient->GetViewportSize(ViewportSize);
     }
+
+    // Compute top-left from cursor center position
+    // CursorViewportPos is already in viewport pixels (from GetMousePosition)
+    // SetPositionInViewport with bRemoveDPIScale=true expects viewport-relative coords (it will handle DPI internally)
+    FVector2D TopLeftPos = CursorViewportPos - (DesiredSize * 0.5f);
     
-    UE_LOG(LogCoding, Warning, TEXT("ShowPingWheelAtScreenLocation: WorldLoc=%s ScreenPos=(%.1f,%.1f) DesiredSize=(%.1f,%.1f) TopLeftPos=(%.1f,%.1f) ViewportScale=%.3f"), 
-        *WorldLocation.ToString(), ScreenPos.X, ScreenPos.Y, DesiredSize.X, DesiredSize.Y, TopLeftPos.X, TopLeftPos.Y, ViewportScale);
+    // Clamp to keep the ping wheel fully visible within the viewport
+    FVector2D MaxTopLeft = ViewportSize / ViewportScale - DesiredSize;
+    MaxTopLeft.X = FMath::Max(0.0f, MaxTopLeft.X);
+    MaxTopLeft.Y = FMath::Max(0.0f, MaxTopLeft.Y);
+    FVector2D ClampedTopLeft;
+    ClampedTopLeft.X = FMath::Clamp(TopLeftPos.X, 0.0f, MaxTopLeft.X);
+    ClampedTopLeft.Y = FMath::Clamp(TopLeftPos.Y, 0.0f, MaxTopLeft.Y);
+    
+    UE_LOG(LogCoding, Display, TEXT("ShowPingWheelAtScreenLocation: WorldLoc=%s CursorVP=(%.1f,%.1f) DesiredSize=(%.1f,%.1f) TopLeft=(%.1f,%.1f) Clamped=(%.1f,%.1f) ViewportScale=%.3f"),
+        *WorldLocation.ToString(), CursorViewportPos.X, CursorViewportPos.Y, DesiredSize.X, DesiredSize.Y, TopLeftPos.X, TopLeftPos.Y, ClampedTopLeft.X, ClampedTopLeft.Y, ViewportScale);
 
     // DIAGNOSTIC: Store debug position for visual overlay
-    LastPingWheelDebugPos = ScreenPos;
+    LastPingWheelDebugPos = CursorViewportPos;
     bShowPingWheelDebug = true;
 
-    // SetPositionInViewport with bRemoveDPIScale=true divides by ViewportScale
-    // We're passing absolute screen coordinates, so this is correct
-    PingWheelInstance->SetPositionInViewport(TopLeftPos, true);
+    // Set the ping wheel widget position (viewport-relative coords, engine handles DPI)
+    PingWheelInstance->SetPositionInViewport(ClampedTopLeft, true);
 }
 
 void UPlayerHUDWidget::RequestPurchase(AShopActor* Shop, UItemData* Item)

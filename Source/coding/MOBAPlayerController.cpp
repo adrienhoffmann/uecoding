@@ -1,6 +1,7 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
 #include "MOBAPlayerController.h"
+#include "Framework/Application/SlateApplication.h"
 #include "InventoryComponent.h"
 #include "ShopActor.h"
 #include "ShopComponent.h"
@@ -433,19 +434,24 @@ void AMOBAPlayerController::OnLeftClickPressed()
 				ViewportClient->GetViewportSize(ViewportSize);
 			}
 			
-			// Use viewport-based check which is independent of window position
-			if (PlayerHUDWidget->IsViewportPositionOverMinimap(ViewportMousePos, ViewportSize))
+			// Use widget's cached absolute adjusted clickable rect (calculated in NativePaint)
+			// This ensures perfect alignment with the debug overlay
+			FVector2D CursorAbs(0.0f, 0.0f);
+			if (FSlateApplication::IsInitialized()) CursorAbs = FSlateApplication::Get().GetCursorPos();
+			bool bOverMinimap = PlayerHUDWidget->IsScreenPositionOverAdjustedClickableRect(CursorAbs);
+
+			if (bOverMinimap)
 			{
-				// Handle minimap click directly
 				bool bCtrl = IsInputKeyDown(EKeys::LeftControl) || IsInputKeyDown(EKeys::RightControl);
 				bool bAlt = IsInputKeyDown(EKeys::LeftAlt) || IsInputKeyDown(EKeys::RightAlt);
-				UE_LOG(LogCoding, Display, TEXT("MOBA: Left click on minimap detected at ViewportPos=(%.1f,%.1f) ViewportSize=(%.1f,%.1f) -> routing to HUD"), ViewportMousePos.X, ViewportMousePos.Y, ViewportSize.X, ViewportSize.Y);
-				PlayerHUDWidget->HandleMinimapClickViewport(ViewportMousePos, ViewportSize, false, bCtrl, bAlt);
+				UE_LOG(LogCoding, Display, TEXT("MOBA: Left click on minimap detected at ViewportPos=(%.1f,%.1f) CursorAbs=(%.1f,%.1f) -> routing to HUD"), ViewportMousePos.X, ViewportMousePos.Y, CursorAbs.X, CursorAbs.Y);
+				bool bHandled = PlayerHUDWidget->HandleMinimapClickViewport(ViewportMousePos, ViewportSize, false, bCtrl, bAlt);
+				UE_LOG(LogCoding, Display, TEXT("MOBA: HandleMinimapClickViewport returned %d"), bHandled ? 1 : 0);
 				return;
 			}
 			else
 			{
-				UE_LOG(LogCoding, Verbose, TEXT("MOBA: Left click NOT on minimap ViewportPos=(%.1f,%.1f), continuing"), ViewportMousePos.X, ViewportMousePos.Y);
+				UE_LOG(LogCoding, Verbose, TEXT("MOBA: Left click NOT on minimap ViewportPos=(%.1f,%.1f), CursorAbs=(%.1f,%.1f), continuing"), ViewportMousePos.X, ViewportMousePos.Y, CursorAbs.X, CursorAbs.Y);
 			}
 		}
 	}
@@ -1297,19 +1303,23 @@ void AMOBAPlayerController::OnRightClickTriggered()
 				ViewportClient->GetViewportSize(ViewportSize);
 			}
 			
-			// Use viewport-based check which is independent of window position
-			if (PlayerHUDWidget->IsViewportPositionOverMinimap(ViewportMousePos, ViewportSize))
+			// Use widget's cached absolute adjusted clickable rect (calculated in NativePaint)
+			// This ensures perfect alignment with the debug overlay
+			FVector2D CursorAbs(0.0f, 0.0f);
+			if (FSlateApplication::IsInitialized()) CursorAbs = FSlateApplication::Get().GetCursorPos();
+			bool bOverMinimap = PlayerHUDWidget->IsScreenPositionOverAdjustedClickableRect(CursorAbs);
+
+			if (bOverMinimap)
 			{
-				// Handle minimap right-click directly
 				bool bCtrl = IsInputKeyDown(EKeys::LeftControl) || IsInputKeyDown(EKeys::RightControl);
 				bool bAlt = IsInputKeyDown(EKeys::LeftAlt) || IsInputKeyDown(EKeys::RightAlt);
-				UE_LOG(LogCoding, Display, TEXT("MOBA: Right click on minimap detected at ViewportPos=(%.1f,%.1f) ViewportSize=(%.1f,%.1f) -> routing to HUD"), ViewportMousePos.X, ViewportMousePos.Y, ViewportSize.X, ViewportSize.Y);
+				UE_LOG(LogCoding, Display, TEXT("MOBA: Right click on minimap detected at ViewportPos=(%.1f,%.1f) CursorAbs=(%.1f,%.1f) -> routing to HUD"), ViewportMousePos.X, ViewportMousePos.Y, CursorAbs.X, CursorAbs.Y);
 				PlayerHUDWidget->HandleMinimapClickViewport(ViewportMousePos, ViewportSize, true, bCtrl, bAlt);
 				return;
 			}
 			else
 			{
-				UE_LOG(LogCoding, Verbose, TEXT("MOBA: Right click NOT on minimap ViewportPos=(%.1f,%.1f), continuing"), ViewportMousePos.X, ViewportMousePos.Y);
+				UE_LOG(LogCoding, Verbose, TEXT("MOBA: Right click NOT on minimap ViewportPos=(%.1f,%.1f), CursorAbs=(%.1f,%.1f), continuing"), ViewportMousePos.X, ViewportMousePos.Y, CursorAbs.X, CursorAbs.Y);
 			}
 		}
 	}
