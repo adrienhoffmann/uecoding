@@ -213,11 +213,13 @@ public:
     // Debug: show clickable minimap overlay in NativePaint
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
     bool bShowClickableAreaDebug = true;
-    // Debug: show click reprojection points and connect them
+    // Debug: show click reprojection points and connect them (disabled - uses obsolete absolute coords)
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
-    bool bShowClickableClickDebug = true;
+    bool bShowClickableClickDebug = false;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
     float ClickDebugDisplaySeconds = 3.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
+    bool bShowNearestIconDebug = false;
     
     // Debug: PingWheel positioning
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
@@ -236,6 +238,12 @@ public:
     // Debug / tuning: offset (in screen px) applied to the clickable center (useful for calibrating alignments)
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
     FVector2D ClickableAreaOffset = FVector2D(0.0f, 0.0f);
+
+    // If true, clicks that fall within the expanded clickable area but outside the visible
+    // minimap will still be accepted. Set to false to restrict clicks to the visible minimap
+    // area only.
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
+    bool bAllowClickableOutsideMinimap = false;
     // Hotkey step sizes for in-editor calibration
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Debug")
     float ClickableAreaPaddingStep = 5.0f;
@@ -551,11 +559,23 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Minimap|Helpers")
     FVector2D GetMinimapTopLeftLocal(const FGeometry& Geometry) const;
 
-    bool ScreenPositionToWorld(const FGeometry& Geometry, const FVector2D& ScreenPosition, FVector& OutWorldLocation, FVector2D* OutMinimapLocal = nullptr) const;
+    // If bAllowPingOutside is true, allow mapping clicks that are inside the clickable area but outside the visible minimap
+    bool ScreenPositionToWorld(const FGeometry& Geometry, const FVector2D& ScreenPosition, FVector& OutWorldLocation, FVector2D* OutMinimapLocal = nullptr, bool bAllowPingOutside = false) const;
 
-    // Check if a screen position is over the minimap area
+    // Check if a screen position is over the minimap area (uses Slate absolute coordinates)
     UFUNCTION(BlueprintCallable, Category = "Minimap|Helpers")
     bool IsScreenPositionOverMinimap(const FVector2D& ScreenPosition) const;
+    
+    // Check if viewport coordinates are over the minimap area (more robust - uses fresh geometry)
+    // ViewportPosition: mouse position from GetMousePosition() (0 to ViewportSize)
+    // ViewportSize: from GetViewportSize()
+    UFUNCTION(BlueprintCallable, Category = "Minimap|Helpers")
+    bool IsViewportPositionOverMinimap(const FVector2D& ViewportPosition, const FVector2D& ViewportSize) const;
+    
+    // Handle minimap click using viewport coordinates (more robust than absolute coordinates)
+    UFUNCTION(BlueprintCallable, Category = "Minimap")
+    bool HandleMinimapClickViewport(const FVector2D& ViewportPosition, const FVector2D& ViewportSize, bool bIsRightClick, bool bCtrlHeld, bool bAltHeld);
+    
     // Fallback: compute minimap TopLeft using viewport size (used when geometry cached is unreliable)
     FVector2D GetMinimapTopLeftFromViewport() const;
     // Returns the absolute screen-space top-left of the minimap
@@ -574,11 +594,17 @@ public:
         // Cached LOCAL minimap rect (for consistent hit-testing using geometry transforms)
         mutable FVector2D CachedMinimapTopLeftLocal = FVector2D::ZeroVector;
         mutable FVector2D CachedMinimapSizeLocal = FVector2D::ZeroVector;
+        // Cached widget local size (for converting viewport coords to local coords)
+        mutable FVector2D CachedWidgetLocalSize = FVector2D::ZeroVector;
         // debug: last click visuals
         mutable FVector2D LastClickScreenPos = FVector2D::ZeroVector;
         mutable FVector2D LastReprojectedScreenPos = FVector2D::ZeroVector;
         // Use existing LastClickWorld declared above; do not duplicate
         mutable double LastClickTime = 0.0;
+        // Diagnostics: nearest icon to the last click (cached for drawing & logging)
+        mutable int32 LastClickNearestIconIndex = -1;
+        mutable float LastClickNearestIconNormDist = 0.0f; // normalized (0..1) distance
+        mutable float LastClickNearestIconWorldDist = 0.0f; // world distance (units)
         // Last chosen candidate info for debugging
         mutable FString LastChosenCandidateTrace;
     UFUNCTION(BlueprintCallable, Category = "Minimap|Helpers")

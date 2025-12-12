@@ -312,7 +312,7 @@ FVector2D UPlayerHUDWidget::GetMinimapTopLeftLocal(const FGeometry& Geometry) co
     return TopLeft;
 }
 
-bool UPlayerHUDWidget::ScreenPositionToWorld(const FGeometry& Geometry, const FVector2D& ScreenPosition, FVector& OutWorldLocation, FVector2D* OutMinimapLocal /*= nullptr*/) const
+bool UPlayerHUDWidget::ScreenPositionToWorld(const FGeometry& Geometry, const FVector2D& ScreenPosition, FVector& OutWorldLocation, FVector2D* OutMinimapLocal /*= nullptr*/, bool bAllowPingOutside /*= false*/) const
 {
     // Use cached LOCAL coordinates for consistent mapping (avoids DPI scaling issues)
     FVector2D MinimapLocalPos = FVector2D::ZeroVector;
@@ -334,7 +334,8 @@ bool UPlayerHUDWidget::ScreenPositionToWorld(const FGeometry& Geometry, const FV
     {
         FVector2D CenterLocal = CachedTLLocal + CachedSizeLocal * 0.5f;
         CenterLocal += ClickableAreaOffset; // tunables are now in local units
-        FVector2D HalfLocal = CachedSizeLocal * 0.5f * ClickableAreaScale;
+        // FIX: Use ClickableAreaScale for X and ClickableAreaScaleY for Y (same as paint)
+        FVector2D HalfLocal = FVector2D(CachedSizeLocal.X * 0.5f * ClickableAreaScale, CachedSizeLocal.Y * 0.5f * ClickableAreaScaleY);
         HalfLocal += ClickableAreaPadding * 0.5f;
         AdjustedTopLeftLocal = CenterLocal - HalfLocal;
         AdjustedSizeLocal = HalfLocal * 2.0f;
@@ -364,7 +365,7 @@ bool UPlayerHUDWidget::ScreenPositionToWorld(const FGeometry& Geometry, const FV
         FVector2D LocalPos = Geometry.AbsoluteToLocal(ScreenPosition);
         // Use cached local coordinates directly (no conversion errors)
         MinimapLocalPos = LocalPos - AdjustedTopLeftLocal;
-        // Bounds check using adjusted local size
+        // Bounds check using adjusted clickable area
         if (MinimapLocalPos.X < 0 || MinimapLocalPos.Y < 0 || MinimapLocalPos.X > AdjustedSizeLocal.X || MinimapLocalPos.Y > AdjustedSizeLocal.Y)
         {
             // Not inside minimap
@@ -372,7 +373,30 @@ bool UPlayerHUDWidget::ScreenPositionToWorld(const FGeometry& Geometry, const FV
         }
         else
         {
-            Normalized = FVector2D(MinimapLocalPos.X / AdjustedSizeLocal.X, MinimapLocalPos.Y / AdjustedSizeLocal.Y);
+            // For normalization/world calc, compute position relative to the ACTUAL minimap (not the adjusted clickable area)
+            FVector2D ActualMinimapLocal = LocalPos - CachedTLLocal;
+
+            // If clicks outside the *visible* minimap are not allowed AND pinging outside isn't requested, reject here
+            if (!bAllowClickableOutsideMinimap && !bAllowPingOutside)
+            {
+                if (ActualMinimapLocal.X < 0.0f || ActualMinimapLocal.Y < 0.0f || ActualMinimapLocal.X > CachedSizeLocal.X || ActualMinimapLocal.Y > CachedSizeLocal.Y)
+                {
+                    UE_LOG(LogCoding, Verbose, TEXT("ScreenPositionToWorld: Rejecting click outside minimap actual bounds (local) LocalPos=(%.1f,%.1f) MinimapTL=(%.1f,%.1f) MinimapSize=(%.1f,%.1f) bAllowClickableOutside=%d bAllowPingOutside=%d"), LocalPos.X, LocalPos.Y, CachedTLLocal.X, CachedTLLocal.Y, CachedSizeLocal.X, CachedSizeLocal.Y, bAllowClickableOutsideMinimap?1:0, bAllowPingOutside?1:0);
+                    return false;
+                }
+            }
+            else
+            {
+                // Click may be outside visible minimap but allowed due to clickable area or ping allowances; clamp into minimap bounds for mapping
+                if (ActualMinimapLocal.X < 0.0f || ActualMinimapLocal.Y < 0.0f || ActualMinimapLocal.X > CachedSizeLocal.X || ActualMinimapLocal.Y > CachedSizeLocal.Y)
+                {
+                    UE_LOG(LogCoding, Verbose, TEXT("ScreenPositionToWorld: Click outside visible minimap but allowed (clamping) LocalPos=(%.1f,%.1f) MinimapTL=(%.1f,%.1f) MinimapSize=(%.1f,%.1f) bAllowPingOutside=%d"), LocalPos.X, LocalPos.Y, CachedTLLocal.X, CachedTLLocal.Y, CachedSizeLocal.X, CachedSizeLocal.Y, bAllowPingOutside?1:0);
+                }
+            }
+            // Clamp to minimap bounds in case the clickable area allows clicks outside the visible minimap
+            ActualMinimapLocal.X = FMath::Clamp(ActualMinimapLocal.X, 0.0f, CachedSizeLocal.X);
+            ActualMinimapLocal.Y = FMath::Clamp(ActualMinimapLocal.Y, 0.0f, CachedSizeLocal.Y);
+            Normalized = FVector2D(ActualMinimapLocal.X / CachedSizeLocal.X, ActualMinimapLocal.Y / CachedSizeLocal.Y);
             // Candidate from geometry mapping
             float GeoNX = (Normalized.X - 0.5f);
             float GeoNY = (0.5f - Normalized.Y);
@@ -416,11 +440,30 @@ bool UPlayerHUDWidget::ScreenPositionToWorld(const FGeometry& Geometry, const FV
         FVector2D TopLeft = GetMinimapTopLeftFromViewport();
         MinimapLocalPos = ScreenPosition - TopLeft;
         if (OutMinimapLocal) *OutMinimapLocal = MinimapLocalPos;
-        if (MinimapLocalPos.X < 0 || MinimapLocalPos.Y < 0 || MinimapLocalPos.X > MinimapSize.X || MinimapLocalPos.Y > MinimapSize.Y)
+        // Check clickable area (fallback uses full minimap in viewport), the adjustable clickable rect may be used for hit-testing
+        FVector2D CenterVP = TopLeft + MinimapSize * 0.5f;
+        CenterVP += ClickableAreaOffset;
+        FVector2D HalfVP = FVector2D(MinimapSize.X * 0.5f * ClickableAreaScale, MinimapSize.Y * 0.5f * ClickableAreaScaleY);
+        HalfVP += ClickableAreaPadding * 0.5f;
+        FVector2D AdjustedTopLeftVP = CenterVP - HalfVP;
+        FVector2D AdjustedSizeVP = HalfVP * 2.0f;
+        if (MinimapLocalPos.X < 0 || MinimapLocalPos.Y < 0 || MinimapLocalPos.X > AdjustedSizeVP.X || MinimapLocalPos.Y > AdjustedSizeVP.Y)
         {
             return false;
         }
-        Normalized = FVector2D(MinimapLocalPos.X / MinimapSize.X, MinimapLocalPos.Y / MinimapSize.Y);
+        // Compute actual minimap-local position for normalization
+        FVector2D ActualMinimapLocal = MinimapLocalPos;
+        if (!bAllowClickableOutsideMinimap && !bAllowPingOutside)
+        {
+            if (ActualMinimapLocal.X < 0.0f || ActualMinimapLocal.Y < 0.0f || ActualMinimapLocal.X > MinimapSize.X || ActualMinimapLocal.Y > MinimapSize.Y)
+            {
+                UE_LOG(LogCoding, Verbose, TEXT("ScreenPositionToWorld(fallback): Rejecting click outside minimap actual bounds VPPos=(%.1f,%.1f) TopLeft=(%.1f,%.1f) Size=(%.1f,%.1f)"), ScreenPosition.X, ScreenPosition.Y, TopLeft.X, TopLeft.Y, MinimapSize.X, MinimapSize.Y);
+                return false;
+            }
+        }
+        ActualMinimapLocal.X = FMath::Clamp(ActualMinimapLocal.X, 0.0f, MinimapSize.X);
+        ActualMinimapLocal.Y = FMath::Clamp(ActualMinimapLocal.Y, 0.0f, MinimapSize.Y);
+        Normalized = FVector2D(ActualMinimapLocal.X / MinimapSize.X, ActualMinimapLocal.Y / MinimapSize.Y);
         float NX = (Normalized.X - 0.5f);
         float NY = (0.5f - Normalized.Y);
         if (bSwapMinimapXY) { float Tmp = NX; NX = NY; NY = Tmp; }
@@ -481,6 +524,209 @@ bool UPlayerHUDWidget::IsScreenPositionOverMinimap(const FVector2D& ScreenPositi
         ScreenPosition.X, ScreenPosition.Y, LocalPos.X, LocalPos.Y, TopLeftLocal.X, TopLeftLocal.Y, SizeLocal.X, SizeLocal.Y,
         AdjustedTopLeftLocal.X, AdjustedTopLeftLocal.Y, AdjustedSizeLocal.X, AdjustedSizeLocal.Y, bInside ? 1 : 0);
     return bInside;
+}
+
+bool UPlayerHUDWidget::IsViewportPositionOverMinimap(const FVector2D& ViewportPosition, const FVector2D& ViewportSize) const
+{
+    // Calculate minimap position directly in viewport coordinates
+    // This avoids any issues with widget local space vs viewport space
+    
+    if (ViewportSize.IsNearlyZero())
+    {
+        return false;
+    }
+    
+    // Calculate minimap top-left in viewport space (same logic as GetMinimapTopLeftFromViewport but using passed ViewportSize)
+    FVector2D Size = MinimapSize;
+    FVector2D TopLeftVP;
+    switch (MinimapAnchorCorner)
+    {
+        case 0: // TopLeft
+            TopLeftVP = FVector2D(MinimapOffset.X, MinimapOffset.Y);
+            break;
+        case 1: // TopRight
+            TopLeftVP = FVector2D(ViewportSize.X - Size.X - MinimapOffset.X, MinimapOffset.Y);
+            break;
+        case 2: // BottomLeft
+            TopLeftVP = FVector2D(MinimapOffset.X, ViewportSize.Y - Size.Y - MinimapOffset.Y);
+            break;
+        case 3: // BottomRight
+        default:
+            TopLeftVP = FVector2D(ViewportSize.X - Size.X - MinimapOffset.X, ViewportSize.Y - Size.Y - MinimapOffset.Y);
+            break;
+    }
+    
+    // Apply clickable area adjustments
+    FVector2D CenterVP = TopLeftVP + Size * 0.5f;
+    CenterVP += ClickableAreaOffset;
+    FVector2D HalfVP = FVector2D(Size.X * 0.5f * ClickableAreaScale, Size.Y * 0.5f * ClickableAreaScaleY);
+    HalfVP += ClickableAreaPadding * 0.5f;
+    FVector2D AdjustedTopLeftVP = CenterVP - HalfVP;
+    FVector2D AdjustedSizeVP = HalfVP * 2.0f;
+    FVector2D AdjustedBRVP = AdjustedTopLeftVP + AdjustedSizeVP;
+    
+    // Check if viewport position is inside the adjusted minimap rect
+    bool bInside = (ViewportPosition.X >= AdjustedTopLeftVP.X && ViewportPosition.Y >= AdjustedTopLeftVP.Y &&
+                    ViewportPosition.X <= AdjustedBRVP.X && ViewportPosition.Y <= AdjustedBRVP.Y);
+    
+    UE_LOG(LogCoding, Verbose, TEXT("IsViewportPositionOverMinimap: VP=(%.1f,%.1f) VPSize=(%.1f,%.1f) MinimapTL=(%.1f,%.1f) AdjTL=(%.1f,%.1f) AdjBR=(%.1f,%.1f) Inside=%d"),
+        ViewportPosition.X, ViewportPosition.Y, ViewportSize.X, ViewportSize.Y,
+        TopLeftVP.X, TopLeftVP.Y, AdjustedTopLeftVP.X, AdjustedTopLeftVP.Y, AdjustedBRVP.X, AdjustedBRVP.Y, bInside ? 1 : 0);
+    
+    // Return whether the viewport position is in the adjusted clickable area (we don't enforce bAllowClickableOutsideMinimap here)
+    return bInside;
+}
+
+bool UPlayerHUDWidget::HandleMinimapClickViewport(const FVector2D& ViewportPosition, const FVector2D& ViewportSize, bool bIsRightClick, bool bCtrlHeld, bool bAltHeld)
+{
+    // Calculate minimap position directly in viewport coordinates
+    // This avoids any issues with widget local space vs viewport space
+    
+    if (ViewportSize.IsNearlyZero())
+    {
+        return false;
+    }
+    
+    // Calculate minimap top-left in viewport space (same logic as GetMinimapTopLeftFromViewport)
+    FVector2D Size = MinimapSize;
+    FVector2D TopLeftVP;
+    switch (MinimapAnchorCorner)
+    {
+        case 0: // TopLeft
+            TopLeftVP = FVector2D(MinimapOffset.X, MinimapOffset.Y);
+            break;
+        case 1: // TopRight
+            TopLeftVP = FVector2D(ViewportSize.X - Size.X - MinimapOffset.X, MinimapOffset.Y);
+            break;
+        case 2: // BottomLeft
+            TopLeftVP = FVector2D(MinimapOffset.X, ViewportSize.Y - Size.Y - MinimapOffset.Y);
+            break;
+        case 3: // BottomRight
+        default:
+            TopLeftVP = FVector2D(ViewportSize.X - Size.X - MinimapOffset.X, ViewportSize.Y - Size.Y - MinimapOffset.Y);
+            break;
+    }
+    
+    // For hit-testing, use the adjusted clickable area
+    FVector2D CenterVP = TopLeftVP + Size * 0.5f;
+    CenterVP += ClickableAreaOffset;
+    FVector2D HalfVP = FVector2D(Size.X * 0.5f * ClickableAreaScale, Size.Y * 0.5f * ClickableAreaScaleY);
+    HalfVP += ClickableAreaPadding * 0.5f;
+    FVector2D AdjustedTopLeftVP = CenterVP - HalfVP;
+    FVector2D AdjustedSizeVP = HalfVP * 2.0f;
+    
+    // Check if viewport position is inside the adjusted clickable area
+    if (ViewportPosition.X < AdjustedTopLeftVP.X || ViewportPosition.Y < AdjustedTopLeftVP.Y ||
+        ViewportPosition.X > AdjustedTopLeftVP.X + AdjustedSizeVP.X || 
+        ViewportPosition.Y > AdjustedTopLeftVP.Y + AdjustedSizeVP.Y)
+    {
+        return false;
+    }
+    
+    // IMPORTANT: For world position calculation, use the ACTUAL minimap rect (not the adjusted clickable area)
+    // The icons are drawn using WorldToMinimapNormalized which uses the actual minimap bounds
+    // So we must normalize relative to the actual minimap, not the clickable area
+    // Map viewport position to widget-local space (if we have cached geometry) so normalization uses the same coordinates
+    FVector2D Normalized = FVector2D::ZeroVector;
+    FVector2D LocalClick = FVector2D::ZeroVector;
+    if (!CachedWidgetLocalSize.IsNearlyZero() && ViewportSize.X > 0.0f && ViewportSize.Y > 0.0f)
+    {
+        LocalClick.X = ViewportPosition.X * (CachedWidgetLocalSize.X / ViewportSize.X);
+        LocalClick.Y = ViewportPosition.Y * (CachedWidgetLocalSize.Y / ViewportSize.Y);
+        FVector2D MinimapLocalFromLocal = LocalClick - CachedMinimapTopLeftLocal;
+
+        // NOTE: We already passed the clickable area check above (AdjustedTopLeftVP/AdjustedSizeVP), so we don't
+        // reject clicks here. Just clamp the position to the minimap bounds for coordinate mapping.
+        // If bAllowClickableOutsideMinimap is false and we want to be strict, the adjusted clickable area
+        // should be set equal to the actual minimap rect (via ClickableAreaScale=1, Padding=0).
+        MinimapLocalFromLocal.X = FMath::Clamp(MinimapLocalFromLocal.X, 0.0f, CachedMinimapSizeLocal.X);
+        MinimapLocalFromLocal.Y = FMath::Clamp(MinimapLocalFromLocal.Y, 0.0f, CachedMinimapSizeLocal.Y);
+        Normalized = FVector2D(MinimapLocalFromLocal.X / CachedMinimapSizeLocal.X, MinimapLocalFromLocal.Y / CachedMinimapSizeLocal.Y);
+    }
+    else
+    {
+        // Fallback to old viewport-based calculation if we don't have proper cached geometry
+        FVector2D MinimapLocalPos = ViewportPosition - TopLeftVP;
+        // Just clamp to minimap bounds without rejecting - we already passed clickable area check
+        MinimapLocalPos.X = FMath::Clamp(MinimapLocalPos.X, 0.0f, Size.X);
+        MinimapLocalPos.Y = FMath::Clamp(MinimapLocalPos.Y, 0.0f, Size.Y);
+        Normalized = FVector2D(MinimapLocalPos.X / Size.X, MinimapLocalPos.Y / Size.Y);
+    }
+    
+    // Convert normalized position to world location (inverse of WorldToMinimapNormalized)
+    float GeoNX = (Normalized.X - 0.5f);
+    float GeoNY = (0.5f - Normalized.Y);
+    
+    if (bSwapMinimapXY)
+    {
+        float Tmp = GeoNX; GeoNX = GeoNY; GeoNY = Tmp;
+    }
+    if (bInvertMinimapX) GeoNX = -GeoNX;
+    if (bInvertMinimapY) GeoNY = -GeoNY;
+    
+    FVector WorldHit;
+    WorldHit.X = WorldCenter.X + GeoNX * 2.0f * WorldBoundsHalfSize.X;
+    WorldHit.Y = WorldCenter.Y + GeoNY * 2.0f * WorldBoundsHalfSize.Y;
+    WorldHit.Z = 0.0f;
+    
+    UE_LOG(LogCoding, Display, TEXT("HandleMinimapClickViewport: VP=(%.1f,%.1f) MinimapTL=(%.1f,%.1f) MinimapSize=(%.1f,%.1f) Normalized=(%.3f,%.3f) World=%s RightClick=%d"),
+        ViewportPosition.X, ViewportPosition.Y, TopLeftVP.X, TopLeftVP.Y, Size.X, Size.Y, Normalized.X, Normalized.Y, *WorldHit.ToString(), bIsRightClick ? 1 : 0);
+    
+    // Store debug info only for right-clicks: avoid left-click placing a path or moving the camera
+    if (bIsRightClick)
+    {
+        FVector2D PixelAbs = CachedMinimapTopLeftAbs + FVector2D(Normalized.X * Size.X, Normalized.Y * Size.Y);
+        LastClickScreenPos = PixelAbs;
+        // Also store the reprojection position for debug (round trip: world->norm->map pixel)
+        LastReprojectedScreenPos = CachedMinimapTopLeftAbs + FVector2D(Normalized.X * Size.X, Normalized.Y * Size.Y);
+        LastClickTime = FPlatformTime::Seconds();
+        SetLastClickDebug(Normalized, WorldHit);
+    }
+    if ((bShowMinimapDebugLabels || bShowClickableClickDebug || bShowNearestIconDebug) && LastClickNearestIconIndex >= 0)
+    {
+        const FMinimapIcon& I = CachedIcons[LastClickNearestIconIndex];
+        UE_LOG(LogCoding, Display, TEXT("HandleMinimapClickViewport: NearestIconIdx=%d IconNorm=(%.3f,%.3f) NormDelta=%.3f WorldDelta=%.1f"),
+            LastClickNearestIconIndex, I.Normalized.X, I.Normalized.Y, LastClickNearestIconNormDist, LastClickNearestIconWorldDist);
+    }
+    
+    // Now handle the click action
+    AMOBAPlayerController* MPC = Cast<AMOBAPlayerController>(GetOwningPlayer());
+    
+    if (bIsRightClick)
+    {
+        // Right-click on minimap: move pawn to that location
+        if (MPC)
+        {
+            MPC->Server_RequestMoveTo(WorldHit);
+            MPC->Server_SpawnCursorEffect(WorldHit);
+        }
+        return true;
+    }
+    
+    // Left-click handling
+    bool bCameraUnlocked = false;
+    if (MPC)
+    {
+        bCameraUnlocked = !MPC->bCameraLocked;
+    }
+    
+    // Ctrl+Click or Alt+Click: open ping wheel
+    if (bCtrlHeld || bAltHeld)
+    {
+        UE_LOG(LogCoding, Display, TEXT("HandleMinimapClickViewport: Ctrl/Alt+left-click - opening ping wheel at world %s"), *WorldHit.ToString());
+        if (PingWheelClass)
+        {
+            ShowPingWheelAtScreenLocation(ViewportPosition, WorldHit);
+        }
+        else if (MPC)
+        {
+            MPC->Server_RequestPing(WorldHit, EMapPingType::Ping_OnMyWay);
+        }
+        return true;
+    }
+    
+    // Normal left-click: do nothing (we only allow ping with Ctrl/Alt). Consume the click to prevent propagation.
+    return true;
 }
 
 FVector2D UPlayerHUDWidget::GetMinimapTopLeftFromViewport() const
@@ -559,7 +805,7 @@ bool UPlayerHUDWidget::HandleMinimapClick(const FVector2D& ScreenPosition, bool 
     const FGeometry& Geo = CachedPaintGeometry; // Use geometry from last paint for accurate mapping
     FVector WorldHit;
     FVector2D MinimapLocalPos;
-    bool bInsideMap = ScreenPositionToWorld(Geo, ScreenPosition, WorldHit, &MinimapLocalPos);
+    bool bInsideMap = ScreenPositionToWorld(Geo, ScreenPosition, WorldHit, &MinimapLocalPos, (bCtrlHeld || bAltHeld));
     
     // Compute adjusted LOCAL rect for debug logs
     FVector2D CenterLocal = CachedTLLocal + CachedSizeLocal * 0.5f;
@@ -594,48 +840,27 @@ bool UPlayerHUDWidget::HandleMinimapClick(const FVector2D& ScreenPosition, bool 
         return true;
     }
     
-    // Left-click handling
-    bool bCameraUnlocked = false;
-    if (MPC)
+    // Left-click handling: Only open ping wheel when Ctrl/Alt is held. Otherwise, consume the left click and do nothing.
     {
-        bCameraUnlocked = !MPC->bCameraLocked;
-    }
-    
-    // Ctrl+Click or Alt+Click: open ping wheel
-    if (bCtrlHeld || bAltHeld)
-    {
-        UE_LOG(LogCoding, Display, TEXT("PlayerHUDWidget: Minimap Ctrl/Alt+left-click - opening ping wheel at world %s"), *WorldHit.ToString());
-        if (PingWheelClass)
+        bool bCameraUnlocked = false;
+        if (MPC)
         {
-            ShowPingWheelAtScreenLocation(ScreenPosition, WorldHit);
+            bCameraUnlocked = !MPC->bCameraLocked;
         }
-        else if (MPC)
+        if (bCtrlHeld || bAltHeld)
         {
-            MPC->Server_RequestPing(WorldHit, EMapPingType::Ping_OnMyWay);
+            UE_LOG(LogCoding, Display, TEXT("PlayerHUDWidget: Minimap Ctrl/Alt+left-click - opening ping wheel at world %s"), *WorldHit.ToString());
+            if (PingWheelClass)
+            {
+                ShowPingWheelAtScreenLocation(ScreenPosition, WorldHit);
+            }
+            else if (MPC)
+            {
+                MPC->Server_RequestPing(WorldHit, EMapPingType::Ping_OnMyWay);
+            }
         }
-        return true;
-    }
-    
-    // Normal left-click: move camera if unlocked
-    if (bCameraUnlocked && MPC)
-    {
-        UE_LOG(LogCoding, Display, TEXT("PlayerHUDWidget: Minimap left-click with camera unlocked - moving camera to %s"), *WorldHit.ToString());
-        MPC->MoveCameraToWorldLocation(WorldHit);
-        return true;
-    }
-    
-    // Camera is locked and no modifier - open ping wheel as convenience
-    UE_LOG(LogCoding, Display, TEXT("PlayerHUDWidget: Minimap left-click with camera locked - opening ping wheel at world %s"), *WorldHit.ToString());
-    if (PingWheelClass)
-    {
-        ShowPingWheelAtScreenLocation(ScreenPosition, WorldHit);
-    }
-    else if (MPC)
-    {
-        MPC->Server_RequestPing(WorldHit, EMapPingType::Ping_OnMyWay);
-    }
-    // Debug: save last click and reprojected screen position
-    if (bShowClickableClickDebug)
+        // Debug: save last click and reprojected screen position for left-clicks too
+        if (bShowClickableClickDebug && bIsRightClick)
     {
         LastClickScreenPos = ScreenPosition;
         LastClickWorld = WorldHit;
@@ -662,13 +887,21 @@ bool UPlayerHUDWidget::HandleMinimapClick(const FVector2D& ScreenPosition, bool 
         float ScaleY = CachedMinimapSizeAbs.Y / MinimapSize.Y;
         UE_LOG(LogCoding, Verbose, TEXT("Minimap sizes: MinimapSize(local)=(%.1f,%.1f) CachedSizeAbs=(%.1f,%.1f) DPI_Scale=(%.3f,%.3f)"),
             MinimapSize.X, MinimapSize.Y, CachedMinimapSizeAbs.X, CachedMinimapSizeAbs.Y, ScaleX, ScaleY);
+        }
+        return true;
     }
-    return true;
 }
 
 void UPlayerHUDWidget::SetMinimapPath(const TArray<FVector>& PathPoints)
 {
     NavPathPoints = PathPoints;
+    // Update the path target so NativeTick uses the correct destination for path recomputation
+    if (PathPoints.Num() > 0)
+    {
+        LastPathTarget = PathPoints.Last();
+        LastClickWorld = PathPoints.Last();
+        bHasLastClick = true;
+    }
 }
 
 void UPlayerHUDWidget::AddDestructionMark(const FVector& WorldLocation)
@@ -1029,6 +1262,33 @@ void UPlayerHUDWidget::SetLastClickDebug(const FVector2D& Normalized, const FVec
     LastClickNormalized = Normalized;
     LastClickWorld = WorldLocation;
     bHasLastClick = true;
+
+    // Compute nearest cached icon (normalized space) for diagnostic purposes
+    int32 BestIndex = -1;
+    float BestSqDist = FLT_MAX;
+    float BestWorldDist = FLT_MAX;
+    for (int32 i = 0; i < CachedIcons.Num(); ++i)
+    {
+        const FMinimapIcon& Icon = CachedIcons[i];
+        // Only consider valid icons (owner actor valid or world-based items)
+        FVector2D Diff = Icon.Normalized - Normalized;
+        float SqDist = Diff.SizeSquared();
+        if (SqDist < BestSqDist)
+        {
+            BestSqDist = SqDist;
+            BestIndex = i;
+            BestWorldDist = FVector::Dist(Icon.WorldLocation, WorldLocation);
+        }
+    }
+    LastClickNearestIconIndex = BestIndex;
+    LastClickNearestIconNormDist = (BestIndex >= 0 && BestSqDist > 0.0f) ? FMath::Sqrt(BestSqDist) : 0.0f;
+    LastClickNearestIconWorldDist = (BestIndex >= 0 && BestWorldDist < FLT_MAX) ? BestWorldDist : 0.0f;
+    if (bShowMinimapDebugLabels && LastClickNearestIconIndex >= 0)
+    {
+        const FMinimapIcon& I = CachedIcons[LastClickNearestIconIndex];
+        UE_LOG(LogCoding, Display, TEXT("LastClickDebug: ClickNorm=(%.3f,%.3f) NearestIconIdx=%d IconNorm=(%.3f,%.3f) NormDelta=%.3f WorldDelta=%.1f"),
+            Normalized.X, Normalized.Y, LastClickNearestIconIndex, I.Normalized.X, I.Normalized.Y, LastClickNearestIconNormDist, LastClickNearestIconWorldDist);
+    }
 }
 
 void UPlayerHUDWidget::SetMinimapInversion(bool InvertX, bool InvertY, bool bSwapXY)
@@ -1116,22 +1376,35 @@ FReply UPlayerHUDWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, co
     }
     // Convert the screen pos to local coords and to world-space (if click falls on the minimap) and get minimap-local coords
     FVector2D LocalPos = InGeometry.AbsoluteToLocal(ScreenPos);
+    // Prepare modifier states for ping allowances
+    bool bAlt = InMouseEvent.IsAltDown();
+    if (!bAlt && FSlateApplication::IsInitialized())
+    {
+        bAlt = FSlateApplication::Get().GetModifierKeys().IsAltDown();
+    }
+
+    // Prepare owning player early so we can inspect controller modifier state as well
+    AMOBAPlayerController* MPC = nullptr;
+    if (APlayerController* PC = GetOwningPlayer())
+    {
+        MPC = Cast<AMOBAPlayerController>(PC);
+    }
+    if (!bAlt && MPC)
+    {
+        bAlt = MPC->IsInputKeyDown(EKeys::LeftAlt) || MPC->IsInputKeyDown(EKeys::RightAlt);
+    }
+
     FVector2D MinimapLocalPos;
     FVector WorldHit = FVector::ZeroVector;
-    bool bInsideMap = ScreenPositionToWorld(InGeometry, ScreenPos, WorldHit, &MinimapLocalPos);
+    bool bInsideMap = ScreenPositionToWorld(InGeometry, ScreenPos, WorldHit, &MinimapLocalPos, /*bAllowPingOutside=*/ (bCtrl || bAlt));
 
     const FKey Button = InMouseEvent.GetEffectingButton();
 
     // Check if camera is unlocked (for left-click camera move on minimap)
     bool bCameraUnlocked = false;
-    AMOBAPlayerController* MPC = nullptr;
-    if (APlayerController* PC = GetOwningPlayer())
+    if (MPC)
     {
-        MPC = Cast<AMOBAPlayerController>(PC);
-        if (MPC)
-        {
-            bCameraUnlocked = !MPC->bCameraLocked;
-        }
+        bCameraUnlocked = !MPC->bCameraLocked;
     }
 
     if (bInsideMap)
@@ -1149,18 +1422,9 @@ FReply UPlayerHUDWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, co
             }
             // WorldHit computed by ScreenPositionToWorld helper when inside minimap
 
-            // Check if Alt is held (for ping)
-            bool bAlt = InMouseEvent.IsAltDown();
-            if (!bAlt && FSlateApplication::IsInitialized())
-            {
-                bAlt = FSlateApplication::Get().GetModifierKeys().IsAltDown();
-            }
-            if (!bAlt && MPC)
-            {
-                bAlt = MPC->IsInputKeyDown(EKeys::LeftAlt) || MPC->IsInputKeyDown(EKeys::RightAlt);
-            }
+            // Alt processed earlier (bAlt), so just use that value here
 
-            // Ctrl+Click or Alt+Click: open ping wheel
+            // Ctrl+Click or Alt+Click: open ping wheel. Otherwise, ignore left click on minimap (consume it).
             if (bCtrl || bAlt)
             {
                 UE_LOG(LogCoding, Display, TEXT("PlayerHUDWidget: Minimap Ctrl/Alt+left-click - opening ping wheel at world %s"), *WorldHit.ToString());
@@ -1174,25 +1438,7 @@ FReply UPlayerHUDWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, co
                 }
                 return FReply::Handled();
             }
-
-            // Normal left-click: move camera if unlocked
-            if (bCameraUnlocked && MPC)
-            {
-                UE_LOG(LogCoding, Display, TEXT("PlayerHUDWidget: Minimap left-click with camera unlocked - moving camera to %s"), *WorldHit.ToString());
-                MPC->MoveCameraToWorldLocation(WorldHit);
-                return FReply::Handled();
-            }
-
-            // Camera is locked and no modifier - open ping wheel as convenience
-            UE_LOG(LogCoding, Display, TEXT("PlayerHUDWidget: Minimap left-click with camera locked - opening ping wheel at world %s"), *WorldHit.ToString());
-            if (PingWheelClass)
-            {
-                ShowPingWheelAtScreenLocation(ScreenPos, WorldHit);
-            }
-            else if (MPC)
-            {
-                MPC->Server_RequestPing(WorldHit, EMapPingType::Ping_OnMyWay);
-            }
+            // Otherwise do nothing on left click (minimap left click is consumed)
             return FReply::Handled();
         }
         
@@ -1216,10 +1462,23 @@ FReply UPlayerHUDWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, co
     }
     else
     {
-        // Click was outside minimap: only handle RightMouseButton here as well
-        // Consume non-right clicks to avoid letting them fall through and trigger movement.
-        if (Button != EKeys::RightMouseButton)
+        // Click was outside minimap
+        // For Ctrl/Alt+left-click, let it fall through to the controller for world ping handling
+        // For plain left-click, consume it (do nothing)
+        // For right-click, we proceed with world trace handling below
+        if (Button == EKeys::LeftMouseButton)
         {
+            if (bCtrl || bAlt)
+            {
+                // Allow Ctrl/Alt+click to fall through to MOBAPlayerController for world pings
+                return Super::NativeOnMouseButtonDown(InGeometry, InMouseEvent);
+            }
+            // Plain left-click outside minimap: consume to prevent accidental actions
+            return FReply::Handled();
+        }
+        else if (Button != EKeys::RightMouseButton)
+        {
+            // Other buttons: consume
             return FReply::Handled();
         }
 
@@ -1334,7 +1593,11 @@ FReply UPlayerHUDWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, co
     {
         ClickNorm = WorldToMinimapNormalized(WorldHit);
     }
-    SetLastClickDebug(ClickNorm, WorldHit);
+    // Only set LastClickDebug for right-clicks to avoid left-click creating movement/path
+    if (Button == EKeys::RightMouseButton)
+    {
+        SetLastClickDebug(ClickNorm, WorldHit);
+    }
 
     // For right-clicks outside minimap, let the controller handle the movement instead
     if (!bInsideMap && Button == EKeys::RightMouseButton && !bCtrl)
@@ -1407,15 +1670,15 @@ int32 UPlayerHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& All
     // Cache LOCAL coordinates for reliable hit-testing (avoids DPI scaling issues)
     CachedMinimapTopLeftLocal = MinimapTopLeft;
     CachedMinimapSizeLocal = Size;
+    // Cache widget local size for viewport->local coordinate conversion
+    CachedWidgetLocalSize = WidgetSize;
     
     // Log cached rect and tunables for debugging click offset issues
     if (bShowMinimapDebugLabels)
     {
         UE_LOG(LogCoding, Display, TEXT("NativePaint: MinimapTopLeft(local)=(%.1f,%.1f) MinimapSize=(%.1f,%.1f)"), MinimapTopLeft.X, MinimapTopLeft.Y, Size.X, Size.Y);
         UE_LOG(LogCoding, Display, TEXT("NativePaint: CachedMinimapTopLeftAbs=(%.1f,%.1f) CachedMinimapSizeAbs=(%.1f,%.1f)"), CachedMinimapTopLeftAbs.X, CachedMinimapTopLeftAbs.Y, CachedMinimapSizeAbs.X, CachedMinimapSizeAbs.Y);
-        UE_LOG(LogCoding, Display, TEXT("NativePaint: ClickableAreaScale=%.3f Padding=(%.1f,%.1f) Offset=(%.1f,%.1f)"), ClickableAreaScale, ClickableAreaPadding.X, ClickableAreaPadding.Y, ClickableAreaOffset.X, ClickableAreaOffset.Y);
-
-        
+        UE_LOG(LogCoding, Display, TEXT("NativePaint: ClickableAreaScale=%.3f ClickableAreaScaleY=%.3f Padding=(%.1f,%.1f) Offset=(%.1f,%.1f)"), ClickableAreaScale, ClickableAreaScaleY, ClickableAreaPadding.X, ClickableAreaPadding.Y, ClickableAreaOffset.X, ClickableAreaOffset.Y);
     }
 
     // Compute the adjusted clickable rect in LOCAL coordinates (same logic as IsScreenPositionOverMinimap).
@@ -1433,7 +1696,7 @@ int32 UPlayerHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& All
     if (bShowMinimapDebugLabels)
     {
         FVector2D CenterNorm = WorldToMinimapNormalized(FVector(WorldCenter.X, WorldCenter.Y, 0.0f));
-        FVector2D CenterPixel = PaintAdjTopLeftLocal + FVector2D(CenterNorm.X * PaintAdjSizeLocal.X, CenterNorm.Y * PaintAdjSizeLocal.Y);
+        FVector2D CenterPixel = MinimapTopLeft + FVector2D(CenterNorm.X * Size.X, CenterNorm.Y * Size.Y);
         const float CrossHalf = 6.0f;
         TArray<FVector2f> CrossPoints;
         CrossPoints.Add(FVector2f(CenterPixel.X - CrossHalf, CenterPixel.Y));
@@ -1454,20 +1717,16 @@ int32 UPlayerHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& All
     }
 
     // Debug: draw clickable area overlay if requested
-    // This now draws the ADJUSTED clickable rect (with Scale/Padding/Offset applied) so you can see the actual clickable zone
+    // Draw the ADJUSTED clickable rect (with Scale/Padding/Offset applied) in GREEN so it's clear what area is interactive
     if (bShowClickableAreaDebug)
     {
         // Computed PaintAdjTopLeftAbs / PaintAdjSizeAbs earlier and converted to local coordinates (PaintAdjTopLeftLocal/PaintAdjSizeLocal)
-        
-        // AdjustedTopLeftLocal / AdjustedBRLocal / AdjustedSizeLocal were computed earlier
-        
-        // Use a semi-transparent color and an outline to make the clickable area visible
-        const FLinearColor FillColor(0.0f, 0.5f, 1.0f, 0.15f);
-        const FLinearColor BorderColor(0.0f, 0.5f, 1.0f, 0.85f);
+        const FLinearColor ClickableFillColor(0.0f, 1.0f, 0.0f, 0.12f); // green, translucent
+        const FLinearColor ClickableBorderColor(0.0f, 1.0f, 0.0f, 0.9f);
 
-        // Draw filled rectangle for the adjusted clickable area
+        // Draw filled rectangle for the adjusted clickable area (green)
         FSlateBrush FillBrush;
-        FillBrush.TintColor = FSlateColor(FillColor);
+        FillBrush.TintColor = FSlateColor(ClickableFillColor);
         FillBrush.DrawAs = ESlateBrushDrawType::Box;
         FillBrush.ImageSize = PaintAdjSizeLocal;
 
@@ -1478,10 +1737,10 @@ int32 UPlayerHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& All
             AdjustedPaintGeom,
             &FillBrush,
             ESlateDrawEffect::None,
-            FillColor
+            ClickableFillColor
         );
 
-        // Border: thin lines around the adjusted rectangle
+        // Border: thin green outline around the adjusted rectangle
         FVector2D LocalTL = PaintAdjTopLeftLocal;
         FVector2D LocalBR = PaintAdjBRLocal;
         TArray<FVector2f> BorderPoints;
@@ -1491,7 +1750,6 @@ int32 UPlayerHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& All
         BorderPoints.Add(FVector2f(LocalTL.X, LocalBR.Y));
         BorderPoints.Add(FVector2f(LocalTL.X, LocalTL.Y));
 
-        // The MakeLines call expects coordinates in the same paint geometry; use the full widget geometry paint to draw
         FPaintGeometry FullGeom = AllottedGeometry.ToPaintGeometry(FVector2D::ZeroVector, AllottedGeometry.GetLocalSize());
         FSlateDrawElement::MakeLines(
             OutDrawElements,
@@ -1499,13 +1757,13 @@ int32 UPlayerHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& All
             FullGeom,
             BorderPoints,
             ESlateDrawEffect::None,
-            BorderColor,
+            ClickableBorderColor,
             true,
             2.0f
         );
-        
-        // Also draw the original minimap rect in a different color (green) so you can compare
-        const FLinearColor OriginalBorderColor(0.0f, 1.0f, 0.0f, 0.6f);
+
+        // Also draw the original minimap rect in blue so you can compare visually
+        const FLinearColor OriginalBorderColor(0.0f, 0.5f, 1.0f, 0.85f);
         TArray<FVector2f> OrigBorderPoints;
         OrigBorderPoints.Add(FVector2f(MinimapTopLeft.X, MinimapTopLeft.Y));
         OrigBorderPoints.Add(FVector2f(MinimapTopLeft.X + Size.X, MinimapTopLeft.Y));
@@ -1522,8 +1780,24 @@ int32 UPlayerHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& All
             true,
             1.5f
         );
-        
-        RetLayer += 3;
+
+        // Add a small label explaining the colors (French)
+        {
+            FSlateFontInfo SmallFont = FCoreStyle::Get().GetFontStyle(TEXT("NormalFont"));
+            SmallFont.Size = FMath::Clamp(SmallFont.Size / 2, 8, 18);
+            FString Legend = FString::Printf(TEXT("Vert = zone cliquable\nBleu = minimap visible"));
+            FSlateDrawElement::MakeText(
+                OutDrawElements,
+                RetLayer + 103,
+                AllottedGeometry.ToPaintGeometry(FVector2D(180.0f, 40.0f), FSlateLayoutTransform(MinimapTopLeft + FVector2D(Size.X + 8.0f, 0.0f))),
+                Legend,
+                SmallFont,
+                ESlateDrawEffect::None,
+                FLinearColor::White
+            );
+        }
+
+        RetLayer += 4;
     }
 
     // Debug: draw last click and reprojected point & connecting line
@@ -1552,6 +1826,48 @@ int32 UPlayerHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& All
         LinePoints.Add(FVector2f(LocalClick.X, LocalClick.Y));
         LinePoints.Add(FVector2f(LocalReproj.X, LocalReproj.Y));
         FSlateDrawElement::MakeLines(OutDrawElements, RetLayer + 12, AllottedGeometry.ToPaintGeometry(FVector2D::ZeroVector, AllottedGeometry.GetLocalSize()), LinePoints, ESlateDrawEffect::None, FLinearColor::Yellow, true, 1.5f);
+        RetLayer += 3;
+    }
+
+    // Debug: draw a vector from the last click to the nearest icon (if configured)
+    if (bShowNearestIconDebug && (FPlatformTime::Seconds() - LastClickTime) <= ClickDebugDisplaySeconds && LastClickNearestIconIndex >= 0 && CachedIcons.IsValidIndex(LastClickNearestIconIndex))
+    {
+        const FMinimapIcon& NIcon = CachedIcons[LastClickNearestIconIndex];
+        FVector2D IconPixel = MinimapTopLeft + FVector2D(NIcon.Normalized.X * Size.X, NIcon.Normalized.Y * Size.Y);
+        FVector2D LocalIcon = IconPixel;
+        // Draw small marker for the icon
+        const float MarkerHalf = 3.0f;
+        FLinearColor IconColor = FLinearColor::White;
+        FSlateBrush IconBrush;
+        IconBrush.DrawAs = ESlateBrushDrawType::Box;
+        IconBrush.TintColor = FSlateColor(IconColor);
+        FPaintGeometry IconGeom = AllottedGeometry.ToPaintGeometry(FVector2D(MarkerHalf * 2.0f, MarkerHalf * 2.0f), FSlateLayoutTransform(LocalIcon - FVector2D(MarkerHalf, MarkerHalf)));
+        FSlateDrawElement::MakeBox(OutDrawElements, RetLayer + 20, IconGeom, &IconBrush, ESlateDrawEffect::None, IconColor);
+
+        // Draw line from the reprojected click point to the icon
+        FVector2D LocalReproj = AllottedGeometry.AbsoluteToLocal(LastReprojectedScreenPos);
+        TArray<FVector2f> NearestLine;
+        NearestLine.Add(FVector2f(LocalReproj.X, LocalReproj.Y));
+        NearestLine.Add(FVector2f(LocalIcon.X, LocalIcon.Y));
+        FSlateDrawElement::MakeLines(OutDrawElements, RetLayer + 21, AllottedGeometry.ToPaintGeometry(FVector2D::ZeroVector, AllottedGeometry.GetLocalSize()), NearestLine, ESlateDrawEffect::None, FLinearColor::Green, true, 1.8f);
+
+        // Draw a textual label near the icon with normalized/world delta
+        FString Label = FString::Printf(TEXT("Idx=%d NormD=%.3f WorldD=%.1f"), LastClickNearestIconIndex, LastClickNearestIconNormDist, LastClickNearestIconWorldDist);
+        {
+            FSlateFontInfo SmallFont = FCoreStyle::Get().GetFontStyle(TEXT("NormalFont"));
+            SmallFont.Size = FMath::Clamp(SmallFont.Size / 2, 8, 18);
+            FVector2D LabelPos = LocalIcon + FVector2D(6.0f, -12.0f);
+            FVector2D LabelSize = FVector2D(220.0f, 18.0f);
+            FSlateDrawElement::MakeText(
+                OutDrawElements,
+                RetLayer + 22,
+                AllottedGeometry.ToPaintGeometry(LabelSize, FSlateLayoutTransform(LabelPos)),
+                Label,
+                SmallFont,
+                ESlateDrawEffect::None,
+                FLinearColor::White
+            );
+        }
         RetLayer += 3;
     }
 
@@ -1851,8 +2167,9 @@ AfterFOWOverlay:
         if (!WeakPing.IsValid()) continue;
         AMapPing* Ping = WeakPing.Get();
         FVector2D Norm = WorldToMinimapNormalized(Ping->PingLocation);
-        // Map normalized coordinates into adjusted clickable area coordinates (so drawn pings match click mapping)
-        FVector2D PixelPos = (PaintAdjTopLeftLocal - MinimapTopLeft) + FVector2D(Norm.X * PaintAdjSizeLocal.X, Norm.Y * PaintAdjSizeLocal.Y);
+        // Map normalized coordinates into MINIMAP local coordinates (map-local space handled by MapGeometry)
+        // Use the actual minimap Size and TopLeft for display to align icons, pings and nav paths
+        FVector2D PixelPos = FVector2D(Norm.X * Size.X, Norm.Y * Size.Y);
         // Clamp PixelPos to minimap bounds to avoid accidental off-by-one outside drawing area
         bool bOutOfBounds = false;
         if (PixelPos.X < 0.0f || PixelPos.Y < 0.0f || PixelPos.X > Size.X || PixelPos.Y > Size.Y)
@@ -1914,7 +2231,8 @@ AfterFOWOverlay:
         for (const FVector& WP : NavPathPoints)
         {
             FVector2D Norm = WorldToMinimapNormalized(WP);
-            Points.Add((PaintAdjTopLeftLocal - MinimapTopLeft) + FVector2D(Norm.X * PaintAdjSizeLocal.X, Norm.Y * PaintAdjSizeLocal.Y));
+            // Map normalized coords to map-local pixel coordinates (MapGeometry origin = MinimapTopLeft).
+            Points.Add(FVector2D(Norm.X * Size.X, Norm.Y * Size.Y));
         }
 
         // Draw polyline
@@ -1983,6 +2301,13 @@ AfterFOWOverlay:
         }
         case EMinimapIconType::Icon_Tower:
         {
+            // Debug: Log tower position for debugging click offset issues
+            if (bShowMinimapDebugLabels)
+            {
+                FVector2D IconLocalInWidget = MinimapTopLeft + PixelPos;
+                UE_LOG(LogCoding, Display, TEXT("Tower Icon: World=%s Norm=(%.3f,%.3f) PixelPos=(%.1f,%.1f) IconLocalInWidget=(%.1f,%.1f) MinimapTL=(%.1f,%.1f) PaintAdjTL=(%.1f,%.1f) PaintAdjSize=(%.1f,%.1f)"),
+                    *Icon.WorldLocation.ToString(), Norm.X, Norm.Y, PixelPos.X, PixelPos.Y, IconLocalInWidget.X, IconLocalInWidget.Y, MinimapTopLeft.X, MinimapTopLeft.Y, PaintAdjTopLeftLocal.X, PaintAdjTopLeftLocal.Y, PaintAdjSizeLocal.X, PaintAdjSizeLocal.Y);
+            }
             // Draw tower: if texture exists use it, otherwise draw a diamond shape
             // Prefer team-specific texture if set, fall back to generic texture
             UTexture2D* TowerTexture = (Icon.TeamID == 0) ? MinimapIcon_Tower_Team0 : MinimapIcon_Tower_Team1;
@@ -2202,7 +2527,7 @@ AfterFOWOverlay:
         float ScaleY = (Size.Y != 0.0f) ? (CachedMinimapSizeAbs.Y / Size.Y) : 0.0f;
         FVector2D CenterNorm = WorldToMinimapNormalized(FVector(WorldCenter.X, WorldCenter.Y, 0.0f));
         FVector2D CenterPixelAbs = CachedMinimapTopLeftAbs + FVector2D(CenterNorm.X * CachedMinimapSizeAbs.X, CenterNorm.Y * CachedMinimapSizeAbs.Y);
-        FString Overlay = FString::Printf(TEXT("Minimap: Mode=%s Swap=%d InvX=%d InvY=%d\nCachedTL=(%.1f,%.1f) Size=(%.1f,%.1f) Scale=(%.3f,%.3f)\nWorldCenter=(%.1f,%.1f) WorldBoundsHalf=(%.1f,%.1f) CenterPx=(%.1f,%.1f)\nLastChosen=%s\nLastClickDiff=(%.1f,%.1f)"), *ModeStr, bSwapMinimapXY?1:0, bInvertMinimapX?1:0, bInvertMinimapY?1:0, CachedMinimapTopLeftAbs.X, CachedMinimapTopLeftAbs.Y, CachedMinimapSizeAbs.X, CachedMinimapSizeAbs.Y, ScaleX, ScaleY, WorldCenter.X, WorldCenter.Y, WorldBoundsHalfSize.X, WorldBoundsHalfSize.Y, CenterPixelAbs.X, CenterPixelAbs.Y, *LastChosenCandidateTrace, LastClickScreenPos.X - LastReprojectedScreenPos.X, LastClickScreenPos.Y - LastReprojectedScreenPos.Y);
+        FString Overlay = FString::Printf(TEXT("Minimap: Mode=%s Swap=%d InvX=%d InvY=%d\nCachedTL=(%.1f,%.1f) Size=(%.1f,%.1f) Scale=(%.3f,%.3f)\nWorldCenter=(%.1f,%.1f) WorldBoundsHalf=(%.1f,%.1f) CenterPx=(%.1f,%.1f)\nLastChosen=%s\nLastClickDiff=(%.1f,%.1f)\nNearestIcon=Idx=%d NormD=%.3f WorldD=%.1f"), *ModeStr, bSwapMinimapXY?1:0, bInvertMinimapX?1:0, bInvertMinimapY?1:0, CachedMinimapTopLeftAbs.X, CachedMinimapTopLeftAbs.Y, CachedMinimapSizeAbs.X, CachedMinimapSizeAbs.Y, ScaleX, ScaleY, WorldCenter.X, WorldCenter.Y, WorldBoundsHalfSize.X, WorldBoundsHalfSize.Y, CenterPixelAbs.X, CenterPixelAbs.Y, *LastChosenCandidateTrace, LastClickScreenPos.X - LastReprojectedScreenPos.X, LastClickScreenPos.Y - LastReprojectedScreenPos.Y, LastClickNearestIconIndex, LastClickNearestIconNormDist, LastClickNearestIconWorldDist);
         FSlateDrawElement::MakeText(
             OutDrawElements,
             RetLayer + 200,
@@ -2390,37 +2715,39 @@ void UPlayerHUDWidget::ShowPingWheelAtWorldLocation(const FVector& WorldLocation
     // Get widget desired size
     FVector2D DesiredSize = PingWheelInstance->GetDesiredSize();
     
-    // Get current mouse position in VIEWPORT coordinates
-    FVector2D ViewportPos = FVector2D::ZeroVector;
-    if (APlayerController* PC = GetOwningPlayer())
+    // FIX: Use ProjectWorldLocationToScreen to get the EXACT screen position 
+    // where the ping will appear - this uses the same coordinate system as the ping rendering
+    FVector2D ScreenPos = FVector2D::ZeroVector;
+    APlayerController* PC = GetOwningPlayer();
+    if (PC)
     {
-        float MouseX = 0.f, MouseY = 0.f;
-        PC->GetMousePosition(MouseX, MouseY);
-        ViewportPos = FVector2D(MouseX, MouseY);
-        
-        // Fallback if mouse pos is invalid - project world location to screen
-        if (ViewportPos.IsNearlyZero())
+        FVector2D ProjectedScreen;
+        if (PC->ProjectWorldLocationToScreen(WorldLocation, ProjectedScreen, false))
         {
-            FVector2D Projected;
-            if (PC->ProjectWorldLocationToScreen(WorldLocation, Projected, true))
-            {
-                // ProjectWorldLocationToScreen returns screen pixels
-                // Convert to viewport coords by dividing by DPI scale
-                float ViewportScale = UWidgetLayoutLibrary::GetViewportScale(this);
-                if (ViewportScale <= 0.0f) ViewportScale = 1.0f;
-                ViewportPos = Projected / ViewportScale;
-            }
+            ScreenPos = ProjectedScreen;
+        }
+        else
+        {
+            // Fallback to mouse position
+            float MouseX = 0.f, MouseY = 0.f;
+            PC->GetMousePosition(MouseX, MouseY);
+            ScreenPos = FVector2D(MouseX, MouseY);
         }
     }
 
-    // Calculate top-left position to center the widget on the cursor
-    FVector2D TopLeftPos = ViewportPos - (DesiredSize * 0.5f);
+    // Get viewport scale
+    float ViewportScale = UWidgetLayoutLibrary::GetViewportScale(this);
+    if (ViewportScale <= 0.0f) ViewportScale = 1.0f;
     
-    UE_LOG(LogCoding, Warning, TEXT("ShowPingWheelAtWorldLocation: ViewportPos=(%.1f,%.1f) DesiredSize=(%.1f,%.1f) TopLeftPos=(%.1f,%.1f) World=%s"), 
-        ViewportPos.X, ViewportPos.Y, DesiredSize.X, DesiredSize.Y, TopLeftPos.X, TopLeftPos.Y, *WorldLocation.ToString());
+    // ProjectWorldLocationToScreen returns absolute screen pixels
+    // Calculate top-left for centering (DesiredSize is in viewport coords, so scale it)
+    FVector2D TopLeftPos = ScreenPos - (DesiredSize * ViewportScale * 0.5f);
+    
+    UE_LOG(LogCoding, Warning, TEXT("ShowPingWheelAtWorldLocation: ScreenPos=(%.1f,%.1f) DesiredSize=(%.1f,%.1f) TopLeftPos=(%.1f,%.1f) ViewportScale=%.3f World=%s"), 
+        ScreenPos.X, ScreenPos.Y, DesiredSize.X, DesiredSize.Y, TopLeftPos.X, TopLeftPos.Y, ViewportScale, *WorldLocation.ToString());
 
-    // SetPositionInViewport with bRemoveDPIScale=false uses viewport coords directly
-    PingWheelInstance->SetPositionInViewport(TopLeftPos, false);
+    // SetPositionInViewport with bRemoveDPIScale=true divides by ViewportScale
+    PingWheelInstance->SetPositionInViewport(TopLeftPos, true);
 }
 
 void UPlayerHUDWidget::ShowPingWheelAtScreenLocation(const FVector2D& ScreenLocation, const FVector& WorldLocation)
@@ -2455,47 +2782,59 @@ void UPlayerHUDWidget::ShowPingWheelAtScreenLocation(const FVector2D& ScreenLoca
     // Force layout to calculate desired size now
     PingWheelInstance->ForceLayoutPrepass();
 
-    // Get widget desired size (this is in DPI-independent design units)
+    // Get widget desired size
     FVector2D DesiredSize = PingWheelInstance->GetDesiredSize();
     
-    // Get current mouse position directly from player controller
-    // GetMousePosition returns coordinates in VIEWPORT space (already DPI-scaled)
-    FVector2D MouseViewportPos = FVector2D::ZeroVector;
-    if (APlayerController* PC = GetOwningPlayer())
+    // FIX: Use ProjectWorldLocationToScreen to get the EXACT screen position 
+    // where the ping will appear - this uses the same coordinate system as the ping rendering
+    FVector2D ScreenPos = FVector2D::ZeroVector;
+    APlayerController* PC = GetOwningPlayer();
+    if (PC)
     {
-        float MX, MY;
-        if (PC->GetMousePosition(MX, MY))
+        // ProjectWorldLocationToScreen returns screen coordinates (absolute pixels)
+        FVector2D ProjectedScreen;
+        if (PC->ProjectWorldLocationToScreen(WorldLocation, ProjectedScreen, false))
         {
-            MouseViewportPos = FVector2D(MX, MY);
+            ScreenPos = ProjectedScreen;
+        }
+        else
+        {
+            // Fallback to mouse position if projection fails
+            float MX, MY;
+            if (PC->GetMousePosition(MX, MY))
+            {
+                ScreenPos = FVector2D(MX, MY);
+            }
         }
     }
     
-    // Get viewport scale for debugging
+    // Get viewport scale
     float ViewportScale = UWidgetLayoutLibrary::GetViewportScale(this);
     if (ViewportScale <= 0.0f) ViewportScale = 1.0f;
     
-    // Calculate top-left position to center the widget on cursor
-    FVector2D TopLeftPos = MouseViewportPos - (DesiredSize * 0.5f);
+    // ProjectWorldLocationToScreen returns absolute screen pixels
+    // SetPositionInViewport with bRemoveDPIScale=true will divide by ViewportScale internally
+    // So we pass absolute coords and let the engine convert
+    FVector2D TopLeftPos = ScreenPos - (DesiredSize * ViewportScale * 0.5f);
     
     // DEBUG: Draw on-screen markers to visualize the positioning
     if (GEngine)
     {
         GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Yellow, 
-            FString::Printf(TEXT("MousePos=(%.0f,%.0f) DesiredSize=(%.0f,%.0f) TopLeft=(%.0f,%.0f) Scale=%.3f"), 
-            MouseViewportPos.X, MouseViewportPos.Y, DesiredSize.X, DesiredSize.Y, TopLeftPos.X, TopLeftPos.Y, ViewportScale));
+            FString::Printf(TEXT("WorldLoc=%s ScreenPos=(%.0f,%.0f) DesiredSize=(%.0f,%.0f) TopLeft=(%.0f,%.0f) Scale=%.3f"), 
+            *WorldLocation.ToString(), ScreenPos.X, ScreenPos.Y, DesiredSize.X, DesiredSize.Y, TopLeftPos.X, TopLeftPos.Y, ViewportScale));
     }
     
-    UE_LOG(LogCoding, Warning, TEXT("ShowPingWheelAtScreenLocation: MouseViewportPos=(%.1f,%.1f) DesiredSize=(%.1f,%.1f) TopLeftPos=(%.1f,%.1f) ViewportScale=%.3f"), 
-        MouseViewportPos.X, MouseViewportPos.Y, DesiredSize.X, DesiredSize.Y, TopLeftPos.X, TopLeftPos.Y, ViewportScale);
+    UE_LOG(LogCoding, Warning, TEXT("ShowPingWheelAtScreenLocation: WorldLoc=%s ScreenPos=(%.1f,%.1f) DesiredSize=(%.1f,%.1f) TopLeftPos=(%.1f,%.1f) ViewportScale=%.3f"), 
+        *WorldLocation.ToString(), ScreenPos.X, ScreenPos.Y, DesiredSize.X, DesiredSize.Y, TopLeftPos.X, TopLeftPos.Y, ViewportScale);
 
     // DIAGNOSTIC: Store debug position for visual overlay
-    LastPingWheelDebugPos = MouseViewportPos;
+    LastPingWheelDebugPos = ScreenPos;
     bShowPingWheelDebug = true;
 
-    // SetPositionInViewport sets the position AND forces anchors to (0,0) - top-left
-    // So we must calculate the top-left corner ourselves
-    // bRemoveDPIScale=false means "use these coordinates as-is" (viewport coords)
-    PingWheelInstance->SetPositionInViewport(TopLeftPos, false);
+    // SetPositionInViewport with bRemoveDPIScale=true divides by ViewportScale
+    // We're passing absolute screen coordinates, so this is correct
+    PingWheelInstance->SetPositionInViewport(TopLeftPos, true);
 }
 
 void UPlayerHUDWidget::RequestPurchase(AShopActor* Shop, UItemData* Item)

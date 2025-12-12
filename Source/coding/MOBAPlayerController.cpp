@@ -9,6 +9,8 @@
 #include "CombatComponent.h"
 #include "PlayerStatsComponent.h"
 #include "Engine/World.h"
+#include "Engine/GameViewportClient.h"
+#include "Slate/SceneViewport.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/WidgetComponent.h"
@@ -418,24 +420,32 @@ void AMOBAPlayerController::OnLeftClickPressed()
 	// Check if user is clicking on the minimap first (screen-space UI check)
 	if (PlayerHUDWidget)
 	{
+		// Get mouse position in viewport coordinates
 		float MouseX, MouseY;
 		if (GetMousePosition(MouseX, MouseY))
 		{
-			FVector2D MousePos(MouseX, MouseY);
-			if (PlayerHUDWidget->IsScreenPositionOverMinimap(MousePos))
+			FVector2D ViewportMousePos(MouseX, MouseY);
+			FVector2D ViewportSize(1920, 1080);
+			
+			// Get viewport size
+			if (UGameViewportClient* ViewportClient = GetWorld()->GetGameViewport())
+			{
+				ViewportClient->GetViewportSize(ViewportSize);
+			}
+			
+			// Use viewport-based check which is independent of window position
+			if (PlayerHUDWidget->IsViewportPositionOverMinimap(ViewportMousePos, ViewportSize))
 			{
 				// Handle minimap click directly
 				bool bCtrl = IsInputKeyDown(EKeys::LeftControl) || IsInputKeyDown(EKeys::RightControl);
 				bool bAlt = IsInputKeyDown(EKeys::LeftAlt) || IsInputKeyDown(EKeys::RightAlt);
-				UE_LOG(LogCoding, Display, TEXT("MOBA: Left click on minimap detected at screen=(%.1f,%.1f) -> routing to HUD"), MousePos.X, MousePos.Y);
-				FVector2D TopLeft = PlayerHUDWidget->GetMinimapTopLeftAbsolute();
-				UE_LOG(LogCoding, Verbose, TEXT("MOBA: HUD TopLeft abs=(%.1f,%.1f) Size=(%.1f,%.1f) Anchor=%d"), TopLeft.X, TopLeft.Y, PlayerHUDWidget->GetMinimapSize().X, PlayerHUDWidget->GetMinimapSize().Y, PlayerHUDWidget->GetMinimapAnchorCorner());
-				PlayerHUDWidget->HandleMinimapClick(MousePos, false, bCtrl, bAlt);
+				UE_LOG(LogCoding, Display, TEXT("MOBA: Left click on minimap detected at ViewportPos=(%.1f,%.1f) ViewportSize=(%.1f,%.1f) -> routing to HUD"), ViewportMousePos.X, ViewportMousePos.Y, ViewportSize.X, ViewportSize.Y);
+				PlayerHUDWidget->HandleMinimapClickViewport(ViewportMousePos, ViewportSize, false, bCtrl, bAlt);
 				return;
 			}
 			else
 			{
-				UE_LOG(LogCoding, Verbose, TEXT("MOBA: Left click NOT on minimap screen=(%.1f,%.1f), continuing"), MousePos.X, MousePos.Y);
+				UE_LOG(LogCoding, Verbose, TEXT("MOBA: Left click NOT on minimap ViewportPos=(%.1f,%.1f), continuing"), ViewportMousePos.X, ViewportMousePos.Y);
 			}
 		}
 	}
@@ -492,18 +502,34 @@ void AMOBAPlayerController::OnLeftClickPressed()
 					PW->AddToViewport();
 					PlayerHUDWidget->PingWheelInstance = PW;
 
-					// Position the ping wheel at the cursor location
+					// Position the ping wheel using ProjectWorldLocationToScreen
+					// This uses the same coordinate system as the ping rendering
 					PW->ForceLayoutPrepass();
 					FVector2D DesiredSize = PW->GetDesiredSize();
-					float MouseX = 0.f, MouseY = 0.f;
-					GetMousePosition(MouseX, MouseY);
-					FVector2D CursorPos(MouseX, MouseY);
 					
-					// Calculate top-left to center widget on cursor
-					FVector2D TopLeftPos = CursorPos - (DesiredSize * 0.5f);
+					FVector2D ScreenPos = FVector2D::ZeroVector;
+					FVector2D ProjectedScreen;
+					if (ProjectWorldLocationToScreen(Location, ProjectedScreen, false))
+					{
+						ScreenPos = ProjectedScreen;
+					}
+					else
+					{
+						// Fallback to mouse position
+						float MouseX = 0.f, MouseY = 0.f;
+						GetMousePosition(MouseX, MouseY);
+						ScreenPos = FVector2D(MouseX, MouseY);
+					}
 					
-					// SetPositionInViewport with bRemoveDPIScale=false uses viewport coords directly
-					PW->SetPositionInViewport(TopLeftPos, false);
+					// Get viewport scale
+					float ViewportScale = UWidgetLayoutLibrary::GetViewportScale(this);
+					if (ViewportScale <= 0.0f) ViewportScale = 1.0f;
+					
+					// Calculate top-left for centering (DesiredSize in viewport coords, ScreenPos in absolute)
+					FVector2D TopLeftPos = ScreenPos - (DesiredSize * ViewportScale * 0.5f);
+					
+					// SetPositionInViewport with bRemoveDPIScale=true divides by ViewportScale
+					PW->SetPositionInViewport(TopLeftPos, true);
 				}
 			}
 			else
@@ -1258,24 +1284,32 @@ void AMOBAPlayerController::OnRightClickTriggered()
 	// Check if user is clicking on the minimap first (screen-space UI check)
 	if (PlayerHUDWidget)
 	{
+		// Get mouse position in viewport coordinates
 		float MouseX, MouseY;
 		if (GetMousePosition(MouseX, MouseY))
 		{
-			FVector2D MousePos(MouseX, MouseY);
-			if (PlayerHUDWidget->IsScreenPositionOverMinimap(MousePos))
+			FVector2D ViewportMousePos(MouseX, MouseY);
+			FVector2D ViewportSize(1920, 1080);
+			
+			// Get viewport size
+			if (UGameViewportClient* ViewportClient = GetWorld()->GetGameViewport())
+			{
+				ViewportClient->GetViewportSize(ViewportSize);
+			}
+			
+			// Use viewport-based check which is independent of window position
+			if (PlayerHUDWidget->IsViewportPositionOverMinimap(ViewportMousePos, ViewportSize))
 			{
 				// Handle minimap right-click directly
 				bool bCtrl = IsInputKeyDown(EKeys::LeftControl) || IsInputKeyDown(EKeys::RightControl);
 				bool bAlt = IsInputKeyDown(EKeys::LeftAlt) || IsInputKeyDown(EKeys::RightAlt);
-				UE_LOG(LogCoding, Display, TEXT("MOBA: Right click on minimap detected at screen=(%.1f,%.1f) -> routing to HUD"), MousePos.X, MousePos.Y);
-				FVector2D TopLeft = PlayerHUDWidget->GetMinimapTopLeftAbsolute();
-				UE_LOG(LogCoding, Verbose, TEXT("MOBA: HUD TopLeft abs=(%.1f,%.1f) Size=(%.1f,%.1f) Anchor=%d"), TopLeft.X, TopLeft.Y, PlayerHUDWidget->GetMinimapSize().X, PlayerHUDWidget->GetMinimapSize().Y, PlayerHUDWidget->GetMinimapAnchorCorner());
-				PlayerHUDWidget->HandleMinimapClick(MousePos, true, bCtrl, bAlt);
+				UE_LOG(LogCoding, Display, TEXT("MOBA: Right click on minimap detected at ViewportPos=(%.1f,%.1f) ViewportSize=(%.1f,%.1f) -> routing to HUD"), ViewportMousePos.X, ViewportMousePos.Y, ViewportSize.X, ViewportSize.Y);
+				PlayerHUDWidget->HandleMinimapClickViewport(ViewportMousePos, ViewportSize, true, bCtrl, bAlt);
 				return;
 			}
 			else
 			{
-				UE_LOG(LogCoding, Verbose, TEXT("MOBA: Right click NOT on minimap screen=(%.1f,%.1f), continuing"), MousePos.X, MousePos.Y);
+				UE_LOG(LogCoding, Verbose, TEXT("MOBA: Right click NOT on minimap ViewportPos=(%.1f,%.1f), continuing"), ViewportMousePos.X, ViewportMousePos.Y);
 			}
 		}
 	}
