@@ -724,6 +724,8 @@ bool UPlayerHUDWidget::HandleMinimapClickViewport(const FVector2D& ViewportPosit
         // Right-click on minimap: move pawn to that location
         if (MPC)
         {
+            // Clear selection locally (client-side) to cancel auto-attack
+            MPC->ClearSelectedTarget();
             MPC->Server_RequestMoveTo(WorldHit);
             MPC->Server_SpawnCursorEffect(WorldHit);
         }
@@ -1600,6 +1602,8 @@ FReply UPlayerHUDWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, co
                 {
                     UE_LOG(LogCoding, Display, TEXT("PlayerHUDWidget: Inside minimap right-click - requesting pawn move to %s"), *WorldHit.ToString());
 
+                    // Clear selection locally to cancel any auto-attack
+                    MPC->ClearSelectedTarget();
                     // Always request server-side movement so the pawn moves to the minimap location.
                     MPC->Server_RequestMoveTo(WorldHit);
                     // Spawn cursor effect via server RPC as well (will multicast to clients).
@@ -1613,6 +1617,8 @@ FReply UPlayerHUDWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, co
                     UE_LOG(LogCoding, Display, TEXT("PlayerHUDWidget: Outside minimap or not right-click - calling Server_RequestMoveTo"));
                     // Default behavior: request movement for the pawn (right-click outside minimap)
                     UE_LOG(LogCoding, Display, TEXT("PlayerHUDWidget: Calling Server_RequestMoveTo to %s and spawning cursor effect"), *WorldHit.ToString());
+                    // Clear selection locally to cancel any auto-attack
+                    MPC->ClearSelectedTarget();
                     MPC->Server_RequestMoveTo(WorldHit);
                     MPC->Server_SpawnCursorEffect(WorldHit);
                 }

@@ -622,6 +622,16 @@ void AMOBAPlayerController::Server_RequestMoveTo_Implementation(const FVector& W
 
 	if (NavSys->ProjectPointToNavigation(WorldLocation, Projected, Extent))
 	{
+		// Clear any server-side combat target before moving to cancel any ongoing auto-attack
+		if (P)
+		{
+			UCombatComponent* CombatComp = P->FindComponentByClass<UCombatComponent>();
+			if (CombatComp)
+			{
+				CombatComp->ClearTarget();
+				UE_LOG(LogCoding, Verbose, TEXT("Server_RequestMoveTo: Cleared server combat target for pawn %s"), *P->GetName());
+			}
+		}
 		// Use SimpleMoveToLocation - this will request server-side movement for the controller
 		UAIBlueprintHelperLibrary::SimpleMoveToLocation(this, Projected.Location);
 		UE_LOG(LogCoding, Verbose, TEXT("Server requested move to %s (projected %s) using controller %s"), *WorldLocation.ToString(), *Projected.Location.ToString(), *GetName());
@@ -1124,6 +1134,8 @@ void AMOBAPlayerController::OnTouchTriggered()
 	FHitResult Hit;
 	if (GetHitResultUnderFinger(ETouchIndex::Touch1, ECollisionChannel::ECC_Visibility, true, Hit))
 	{
+		// Clear selected target to cancel any auto-attack when user explicitly moves via touch
+		ClearSelectedTarget();
 		UAIBlueprintHelperLibrary::SimpleMoveToLocation(this, Hit.Location);
 	}
 }
@@ -1349,6 +1361,8 @@ void AMOBAPlayerController::OnRightClickTriggered()
 	if (GetHitResultUnderCursor(ECollisionChannel::ECC_Visibility, true, Hit))
 	{
 		UE_LOG(LogCoding, Display, TEXT("OnRightClickTriggered: Requesting server move to %s"), *Hit.Location.ToString());
+		// Clear any locally selected target to cancel auto-attack before moving
+		ClearSelectedTarget();
 		// Request server to move the pawn (authoritative)
 		Server_RequestMoveTo(Hit.Location);
 		// Spawn cursor effect on all clients via server RPC

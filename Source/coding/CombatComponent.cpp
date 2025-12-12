@@ -137,7 +137,14 @@ void UCombatComponent::ClearTarget()
 	{
 		return;
 	}
+	// Stop any attack animation and clear attacking state
+	if (CombatAnimComp)
+	{
+		CombatAnimComp->StopAttackAnimation();
+	}
+	bIsAttacking = false;
 	CurrentTarget = nullptr;
+	UE_LOG(LogCoding, Verbose, TEXT("CombatComponent::ClearTarget: cleared current target and stopped attack for %s"), *GetOwner()->GetName());
 }
 
 bool UCombatComponent::IsTargetInRange() const
