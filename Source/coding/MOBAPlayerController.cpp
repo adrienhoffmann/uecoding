@@ -28,6 +28,8 @@
 #include "PlayerHUDWidget.h"
 #include "Blueprint/UserWidget.h"
 #include "PingWheelWidget.h"
+#include "Projectile.h"
+#include "CombatAnimComponent.h"
 #include "AbilityComponent.h"
 #include "MapPing.h"
 #include "NavigationSystem.h"
@@ -59,6 +61,110 @@ AMOBAPlayerController::AMOBAPlayerController()
 	FreeCameraActor = nullptr;
 }
 
+// Try cast ability: client-side request. Handles smart-cast vs entering targeting mode.
+void AMOBAPlayerController::TryCastAbility(int32 AbilityIndex)
+{
+	UE_LOG(LogCoding, Display, TEXT("TryCastAbility called for index %d SelectedTarget=%s bSmartCast=%d"), AbilityIndex, SelectedTarget ? *SelectedTarget->GetName() : TEXT("NULL"), bSmartCastEnabled?1:0);
+
+	if (bSmartCastEnabled && SelectedTarget)
+	{
+		APawn* P = GetPawn();
+		if (!P) return;
+		float Dist = FVector::Dist(P->GetActorLocation(), SelectedTarget->GetActorLocation());
+		const float MaxRange = 800.0f;
+		if (Dist <= MaxRange)
+		{
+			Server_RequestCastAbility(AbilityIndex, SelectedTarget);
+			return;
+		}
+	}
+
+	if (PlayerHUDWidget)
+	{
+		PlayerHUDWidget->EnterTargetingMode(AbilityIndex);
+	}
+}
+
+bool AMOBAPlayerController::Server_RequestCastAbility_Validate(int32 AbilityIndex, AActor* Target)
+{
+	return AbilityIndex >= 0 && AbilityIndex < 8;
+}
+
+void AMOBAPlayerController::Server_RequestCastAbility_Implementation(int32 AbilityIndex, AActor* Target)
+{
+	APawn* P = GetPawn();
+	if (!P) return;
+
+	UE_LOG(LogCoding, Display, TEXT("Server_RequestCastAbility_Implementation: requested cast idx=%d Target=%s by %s"), AbilityIndex, Target ? *Target->GetName() : TEXT("NULL"), *GetName());
+
+	if (Target)
+	{
+		UHealthComponent* TargetHealth = Target->FindComponentByClass<UHealthComponent>();
+		if (!TargetHealth || TargetHealth->bIsDead) return;
+		if (!UHealthComponent::AreEnemies(P, Target)) return;
+		float Dist = FVector::Dist(P->GetActorLocation(), Target->GetActorLocation());
+		if (Dist > 800.0f) return;
+	}
+
+	UAbilityComponent* AbComp = P->FindComponentByClass<UAbilityComponent>();
+	if (AbComp)
+	{
+		float ManaCost = 20.0f;
+		float Cooldown = 6.0f;
+		if (!AbComp->TryUseAbility(AbilityIndex, ManaCost, Cooldown))
+		{
+			UE_LOG(LogCoding, Warning, TEXT("Server_RequestCastAbility: TryUseAbility failed for %d"), AbilityIndex);
+			return;
+		}
+	}
+
+	Multicast_PlayCastAnimation(AbilityIndex);
+
+	FTimerDelegate SpawnDelegate = FTimerDelegate::CreateLambda([this, P, Target]() {
+		if (!GetWorld()) return;
+		if (!P) return;
+		if (!SpellArcaneBoltClass)
+		{
+			UE_LOG(LogCoding, Warning, TEXT("Server_RequestCastAbility: SpellArcaneBoltClass not set"));
+			return;
+		}
+		FVector SpawnLocation = P->GetActorLocation() + P->GetActorForwardVector() * 100.0f + FVector(0, 0, 50.0f);
+		FRotator SpawnRotation = FRotator::ZeroRotator;
+		FActorSpawnParameters Params;
+		Params.Owner = P;
+		Params.Instigator = P->GetInstigator();
+		AProjectile* Proj = GetWorld()->SpawnActor<AProjectile>(SpellArcaneBoltClass, SpawnLocation, SpawnRotation, Params);
+		if (Proj)
+		{
+			Proj->ProjectileOwner = P;
+			Proj->Damage = 50.0f;
+			if (Target)
+			{
+				Proj->InitializeWithTarget(Target, P);
+			}
+			else
+			{
+				FVector Dir = P->GetActorForwardVector();
+				Proj->Initialize(Dir, P);
+			}
+			UE_LOG(LogCoding, Display, TEXT("Server_RequestCastAbility: Spawned ArcaneBolt projectile by %s"), *P->GetName());
+		}
+	});
+	FTimerHandle Handle;
+	GetWorldTimerManager().SetTimer(Handle, SpawnDelegate, 0.05f, false);
+}
+
+void AMOBAPlayerController::Multicast_PlayCastAnimation_Implementation(int32 AbilityIndex)
+{
+	APawn* P = GetPawn();
+	if (!P) return;
+	UCombatAnimComponent* AnimComp = P->FindComponentByClass<UCombatAnimComponent>();
+	if (AnimComp)
+	{
+		AnimComp->PlayRangedAttack();
+	}
+}
+
 void AMOBAPlayerController::BeginPlay()
 {
 	Super::BeginPlay();
@@ -76,7 +182,7 @@ void AMOBAPlayerController::BeginPlay()
 	}
 	else
 	{
-		UE_LOG(LogTemp, Error, TEXT("MOBA: No Subsystem found!"));
+		UE_LOG(LogTemp, Warning, TEXT("MOBA: PlayerHUDClass is NULL"));
 	}
 
 	// Create player HUD widget (client-side only)
@@ -87,8 +193,7 @@ void AMOBAPlayerController::BeginPlay()
 		{
 			W->AddToViewport();
 			PlayerHUDWidget = Cast<UPlayerHUDWidget>(W);
-				UE_LOG(LogTemp, Log, TEXT("MOBA: PlayerHUDWidget created: %s"), PlayerHUDWidget ? *PlayerHUDWidget->GetName() : TEXT("NULL"));
-
+			UE_LOG(LogTemp, Log, TEXT("MOBA: PlayerHUDWidget created: %s"), PlayerHUDWidget ? *PlayerHUDWidget->GetName() : TEXT("NULL"));
 			// Bind to stats changed for live updates
 			UPlayerStatsComponent* Stats = GetPlayerStatsComponent();
 			if (Stats)
@@ -124,6 +229,10 @@ void AMOBAPlayerController::BeginPlay()
 				}
 			}
 		}
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("MOBA: No Subsystem found!"));
 	}
 }
 

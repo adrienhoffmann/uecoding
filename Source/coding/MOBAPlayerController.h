@@ -16,6 +16,8 @@ class UPlayerHUDWidget;
 class UUserWidget;
 class AMapPing;
 class UNiagaraSystem;
+class AProjectile;
+class UCombatAnimComponent;
 
 UCLASS()
 class CODING_API AMOBAPlayerController : public APlayerController
@@ -31,6 +33,26 @@ public:
 	// Move the camera to a world location (used by minimap clicks).
 	UFUNCTION(BlueprintCallable, Category = "Camera")
 	void MoveCameraToWorldLocation(const FVector& WorldLocation);
+	
+	// Spell: Arcane Bolt projectile class (set in BP defaults)
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Abilities")
+	TSubclassOf<class AProjectile> SpellArcaneBoltClass;
+	
+	// Enable/disable smart cast (true = smart cast uses SelectedTarget if valid)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Abilities")
+	bool bSmartCastEnabled;
+	
+	// Client request to cast an ability (smart/normal handled by controller)
+	UFUNCTION(BlueprintCallable, Category = "Abilities")
+	void TryCastAbility(int32 AbilityIndex);
+	
+	// Server RPC to perform the ability cast (authoritative)
+	UFUNCTION(Server, Reliable, WithValidation)
+	void Server_RequestCastAbility(int32 AbilityIndex, AActor* Target);
+	
+	// Multicast to play cast animation/effects on clients
+	UFUNCTION(NetMulticast, Reliable)
+	void Multicast_PlayCastAnimation(int32 AbilityIndex);
 
 protected:
 	virtual void BeginPlay() override;

@@ -329,6 +329,8 @@ public:
     UPROPERTY(meta = (BindWidgetOptional))
     UButton* SummonerButton_2;
 
+        // Enter/exit a targeting mode for an ability index (normal cast flow)
+        void EnterTargetingMode(int32 AbilityIndex);
     // Passive ability image
     UPROPERTY(meta = (BindWidgetOptional))
     UImage* PassiveImage;

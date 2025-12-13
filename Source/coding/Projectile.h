@@ -8,6 +8,7 @@
 
 class USphereComponent;
 class UProjectileMovementComponent;
+class UNiagaraSystem;
 
 UCLASS()
 class CODING_API AProjectile : public AActor
@@ -74,4 +75,14 @@ public:
 	// Initialize projectile with homing target
 	UFUNCTION(BlueprintCallable, Category = "Projectile")
 	void InitializeWithTarget(AActor* Target, AActor* InProjectileOwner);
+
+	// Niagara effects
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Effects")
+	UNiagaraSystem* ProjectileVFX;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Effects")
+	UNiagaraSystem* ImpactVFX;
+
+	UFUNCTION(NetMulticast, Unreliable)
+	void Multicast_SpawnImpactEffect(const FVector& Location);
 };

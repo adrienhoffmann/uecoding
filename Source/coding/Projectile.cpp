@@ -6,6 +6,8 @@
 #include "Components/StaticMeshComponent.h"
 #include "GameFramework/ProjectileMovementComponent.h"
 #include "Logging.h"
+#include "NiagaraFunctionLibrary.h"
+#include "NiagaraSystem.h"
 
 AProjectile::AProjectile()
 {
@@ -63,6 +65,12 @@ void AProjectile::BeginPlay()
 	SetLifeSpan(Lifetime);
 	
 	UE_LOG(LogCoding, Verbose, TEXT("Projectile spawned at %s"), *GetActorLocation().ToString());
+
+    // Spawn projectile VFX attached to this actor, if configured
+    if (ProjectileVFX)
+    {
+        UNiagaraFunctionLibrary::SpawnSystemAttached(ProjectileVFX, RootComponent, NAME_None, FVector::ZeroVector, FRotator::ZeroRotator, EAttachLocation::KeepRelativeOffset, true);
+    }
 }
 
 void AProjectile::OnHit(UPrimitiveComponent* HitComponent, AActor* OtherActor, UPrimitiveComponent* OtherComp, 
@@ -123,9 +131,20 @@ void AProjectile::OnOverlap(UPrimitiveComponent* OverlappedComponent, AActor* Ot
 			UE_LOG(LogCoding, Verbose, TEXT("Projectile overlapped enemy %s"), *OtherActor->GetName());
 			HealthComp->TakeDamage(Damage, ProjectileOwner);
 			UE_LOG(LogCoding, Verbose, TEXT("Projectile hit %s for %.2f dmg"), *OtherActor->GetName(), Damage);
+			// Spawn impact effect and destroy
+			FVector ImpactLocation = SweepResult.bBlockingHit ? FVector(SweepResult.ImpactPoint) : GetActorLocation();
+			Multicast_SpawnImpactEffect(ImpactLocation);
 			Destroy();
 		}
 		// Else: it's an ally, ignore and keep flying
+	}
+
+	// If we overlapped world static or other object with no health component, spawn impact and destroy
+	if (!HealthComp && OtherActor && !OtherActor->IsA(AProjectile::StaticClass()) && OtherActor != ProjectileOwner)
+	{
+		FVector ImpactLocation = SweepResult.bBlockingHit ? FVector(SweepResult.ImpactPoint) : GetActorLocation();
+		Multicast_SpawnImpactEffect(ImpactLocation);
+		Destroy();
 	}
 }
 
@@ -177,5 +196,13 @@ void AProjectile::InitializeWithTarget(AActor* Target, AActor* InProjectileOwner
 			UE_LOG(LogCoding, Verbose, TEXT("Projectile homing accel: %.0f"), 
 				ProjectileMovement->HomingAccelerationMagnitude);
 		}
+	}
+}
+
+void AProjectile::Multicast_SpawnImpactEffect_Implementation(const FVector& Location)
+{
+	if (ImpactVFX && GetWorld())
+	{
+		UNiagaraFunctionLibrary::SpawnSystemAtLocation(GetWorld(), ImpactVFX, Location, FRotator::ZeroRotator, FVector(1.0f), true, true, ENCPoolMethod::AutoRelease);
 	}
 }

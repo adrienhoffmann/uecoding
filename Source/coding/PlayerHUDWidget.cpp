@@ -2746,15 +2746,28 @@ void UPlayerHUDWidget::OnSpellQClicked()
     UE_LOG(LogCoding, Display, TEXT("HUD: Spell Q clicked"));
     if (APlayerController* PC = GetOwningPlayer())
     {
+        if (AMOBAPlayerController* MPC = Cast<AMOBAPlayerController>(PC))
+        {
+            MPC->TryCastAbility(0);
+            return;
+        }
         if (APawn* P = PC->GetPawn())
         {
             if (UAbilityComponent* Ab = Cast<UAbilityComponent>(P->GetComponentByClass(UAbilityComponent::StaticClass())))
             {
+                // Fallback for old UI flow
                 Ab->TryUseAbility(0, 0.0f, 0.0f);
             }
         }
     }
 }
+void UPlayerHUDWidget::EnterTargetingMode(int32 AbilityIndex)
+{
+    UE_LOG(LogCoding, Display, TEXT("HUD: EnterTargetingMode for ability %d"), AbilityIndex);
+    // TODO: show targeting reticle and highlight valid targets within range (800).
+    // This is a stub that can be expanded with widget visuals.
+}
+
 
 void UPlayerHUDWidget::OnSpellWClicked()
 {
