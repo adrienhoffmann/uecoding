@@ -60,6 +60,9 @@ void ABushVolume::OnConstruction(const FTransform& Transform)
             Cap->SetCapsuleHalfHeight(Spacing * 0.5f);
             Cap->SetCapsuleRadius(SplineWidth * 0.5f);
             Cap->SetCollisionProfileName(TEXT("BlockAll"));
+            // Only block visibility channel to be used for LOS occlusion; ignore other channels for performance
+            Cap->SetCollisionResponseToAllChannels(ECollisionResponse::ECR_Ignore);
+            Cap->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
             Cap->SetCanEverAffectNavigation(false);
             Cap->SetGenerateOverlapEvents(false);
             GeneratedCapsules.Add(Cap);
@@ -69,6 +72,8 @@ void ABushVolume::OnConstruction(const FTransform& Transform)
     {
         // Ensure box also blocks visibility and uses size from designer
         CollisionBox->SetCollisionProfileName(TEXT("BlockAll"));
+        CollisionBox->SetCollisionResponseToAllChannels(ECollisionResponse::ECR_Ignore);
+        CollisionBox->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
         CollisionBox->SetGenerateOverlapEvents(false);
     }
 }
