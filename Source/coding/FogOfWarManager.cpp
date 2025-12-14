@@ -13,6 +13,7 @@
 #include "EngineUtils.h"
 #include "Kismet/GameplayStatics.h"
 #include "Logging.h"
+#include "BushVolume.h"
 
 // Console toggle to reduce verbose FogOfWar logs in normal play. Set `coding.Fog.DebugLogs 1` to enable detailed logs.
 static int32 GCodingFogDebugLogs = 0;
@@ -21,6 +22,10 @@ FAutoConsoleVariableRef CVarCodingFogDebugLogs(TEXT("coding.Fog.DebugLogs"), GCo
 // Ignore minion/turret/nexus collision during LOS tracing when non-zero
 static int32 GCodingFogIgnoreUnitCollision = 1;
 FAutoConsoleVariableRef CVarCodingFogIgnoreUnitCollision(TEXT("coding.Fog.IgnoreUnitCollision"), GCodingFogIgnoreUnitCollision, TEXT("If non-zero, Fog LOS ignores minion/turret/nexus collision in traces (default=1)"), ECVF_Default);
+
+// Ignore bush blocking if the vision source is inside the same bush
+static int32 GCodingFogIgnoreBushWhenInside = 1;
+FAutoConsoleVariableRef CVarCodingFogIgnoreBushWhenInside(TEXT("coding.Fog.IgnoreBushWhenInside"), GCodingFogIgnoreBushWhenInside, TEXT("If non-zero, fog LOS ignores blocking by BushVolume when vision source is inside the same bush (default=1)"), ECVF_Default);
 
 TWeakObjectPtr<AFogOfWarManager> AFogOfWarManager::Instance = nullptr;
 
@@ -498,6 +503,33 @@ void AFogOfWarManager::ApplyVisionSource(UVisionSourceComponent* Source)
 			++TotalTraced;
 			// If we hit something, allow configurable exclusions (minions/turrets/nexus)
 			bool bEffectiveHit = bHit;
+			// If we hit a bush, and the source is inside that bush, treat as non-blocking
+			if (bHit && GCodingFogIgnoreBushWhenInside)
+			{
+				AActor* HitActor = Hit.GetActor();
+				if (HitActor)
+				{
+					ABushVolume* HitBush = Cast<ABushVolume>(HitActor);
+					if (HitBush)
+					{
+						AActor* SourceOwner = Source->GetOwner();
+						if (SourceOwner && HitBush->IsActorInside(SourceOwner))
+						{
+							// Source inside same bush -> allow LOS
+							bEffectiveHit = false;
+							if (bDebugLOS)
+							{
+								UE_LOG(LogCoding, VeryVerbose, TEXT("Fog LOS: ignoring hit on bush %s at cell (%d,%d) because source is inside"), *HitBush->GetName(), X, Y);
+							}
+						}
+						else
+						{
+							// still a blocking bush
+							bEffectiveHit = true;
+						}
+					}
+				}
+			}
 			if (bHit && GCodingFogIgnoreUnitCollision)
 			{
 				AActor* HitActor = Hit.GetActor();
